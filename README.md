@@ -25,11 +25,29 @@ PORT=8010 .venv/bin/python autobot.py     # env: PORT, KEV_URL, CONFIG_PATH, TIM
     `stream: true` passes SSE chunks through untouched. Kev down or a bad
     answer falls back to `defaultModel`.
 - `GET /v1/models`, `GET /health` — OpenAI-style listing and status.
-- `GET /` — web UI controls: form editor for the Kev server address,
-  fallback model, and every provider/model field (save writes the JSON file).
-- `GET /api/routes` — recent routing decisions with probabilities.
 - Config is re-read from disk per request, so editing `providers.json`
   (or saving via the UI) takes effect immediately.
+
+## Web UI
+
+Open `http://localhost:PORT/`. A single page for editing config without
+touching JSON:
+
+- **routing** — Kev server address and fallback-model dropdown (lists every
+  configured model id).
+- **providers** — one card per provider with base URL, api type, API key,
+  description, and a table of its models (id + routing description);
+  add/delete providers and models in place.
+- **Save config** — validates then writes `providers.json` atomically
+  (`POST /api/config`); since the file is re-read per request, changes are
+  live immediately. The header shows Kev up/down, polled from `/health`
+  every 5s.
+
+Backing JSON endpoints: `GET/POST /api/config`, `GET /api/routes` (last ~200
+routing decisions with probabilities).
+
+Note: the UI has no auth and displays API keys in plain fields — keep it on a
+local/private interface, don't expose it publicly.
 
 ## providers.json
 
