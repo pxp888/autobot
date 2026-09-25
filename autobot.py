@@ -52,6 +52,9 @@ def validate_config(cfg) -> None:
         for m in prov["models"]:
             if not isinstance(m, dict) or not m.get("id"):
                 raise ValueError(f'provider "{name}": every model needs an id')
+            h = m.get("handicap")
+            if h is not None and (isinstance(h, bool) or not isinstance(h, (int, float))):
+                raise ValueError(f'provider "{name}"/{m["id"]}: handicap must be a number')
 
 
 # ---------- routing decision ----------
@@ -85,6 +88,18 @@ def candidates(cfg) -> list[tuple[str, str, dict, dict]]:
             seen.add(m["id"])
             out.append((key, pname, m, prov))
     return out
+
+
+def model_handicap(model: dict) -> float:
+    """Per-model multiplier on routing probability (steering knob). 1 = neutral."""
+    h = model.get("handicap", 1)
+    if isinstance(h, bool):
+        return 1.0
+    try:
+        v = float(h)
+        return v if not (v != v) else 1.0  # NaN guard
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def describe(pname: str, model: dict, prov: dict) -> str:
@@ -151,11 +166,14 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
             else:
                 answers = [await kev_question(client, state, criteria, url)]
         probs = average_probs(list(answers))
-        key = max(probs, key=probs.get) if probs else fallback_key
+        # apply per-model handicap (steering knob) before picking argmax
+        effective = {k: probs[k] * model_handicap(by_key.get(k, (None,))[2]) for k in probs}
+        key = max(effective, key=effective.get) if effective else fallback_key
         bad_answer = key not in by_key  # keys are ours, so this only fires on a malformed answer
         cand = by_key[key]
         log_route(req_model, state, probs, " / ".join(a.get("choice", "?") for a in answers),
-                  key, None, bad_answer, {"provider": cand[1], "model": cand[2]["id"]})
+                  key, None, bad_answer, {"provider": cand[1], "model": cand[2]["id"]},
+                  effectives=effective)
         return cand, bad_answer
     except Exception as e:  # kev down / bad answer -> default model keeps the gateway alive
         cand = by_key[fallback_key]
@@ -164,7 +182,7 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
         return cand, True
 
 
-def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None):
+def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None, effectives=None):
     entry = {
         "ts": time.strftime("%H:%M:%S"),
         "requested": requested or "(auto)",
@@ -175,6 +193,8 @@ def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=N
         "fallback": fell_back,
         "preview": state[:160].replace("\n", " "),
     }
+    if effectives is not None:
+        entry["effective"] = {k: round(v, 3) for k, v in effectives.items()}
     if sent is not None:
         entry["sent"] = sent  # exactly what forward() POSTs upstream: {provider, model}
     route_log.appendleft(entry)
@@ -363,6 +383,12 @@ def selftest() -> None:
             # explicit model bypasses routing (decide is async; check the fast path's contract)
             got = asyncio.run(decide(cfg, {"model": "c"}, "anything"))
             assert got[0][2]["id"] == "c" and got[0][3].get("apiKey") == "k", got
+
+            # handicap: multiplier on routing probability; default 1.0 for no-op models
+            assert model_handicap({}) == 1.0
+            assert model_handicap({"handicap": 2.0}) == 2.0
+            assert model_handicap({"handicap": "garbage"}) == 1.0
+            assert model_handicap({"handicap": True}) == 1.0
             last = json.loads(LOG_PATH.read_text().splitlines()[-1])
             assert last["requested"] == "c" and last["picked"] == "c" and not last["fallback"], last
             assert last["sent"] == {"provider": "p2", "model": "c"}, last

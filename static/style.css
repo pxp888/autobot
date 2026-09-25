@@ -9,4 +9,4 @@ button.danger{background:#633} .muted{color:#777;font-size:12px}
 .prov h3{margin:0 0 .5rem;font-size:14px;display:flex;justify-content:space-between;align-items:center}
 label{display:block;font-size:12px;color:#9ab;margin-top:.45rem}
 input,select{width:100%;box-sizing:border-box;background:#0a0a0a;border:1px solid #333;color:#ddd;padding:.32rem .5rem;font:inherit;margin-top:.15rem}
-td input,td textarea{margin:0;resize:vertical} .rowbtn{white-space:nowrap}
+td input,td textarea{margin:0;resize:vertical;width:100%;min-height:4rem} .rowbtn{white-space:nowrap}
