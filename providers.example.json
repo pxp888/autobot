@@ -1,0 +1,15 @@
+{
+  "defaultModel": "example-fast",
+  "providers": {
+    "myprovider": {
+      "baseUrl": "https://example.com/v1",
+      "api": "openai-completions",
+      "apiKey": "your-key-here",
+      "description": "optional context fed to Kev when routing",
+      "models": [
+        { "id": "example-smart", "description": "advanced code generation, hard reasoning" },
+        { "id": "example-fast", "description": "minor edits, repo search, routine work" }
+      ]
+    }
+  }
+}

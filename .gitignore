@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# real provider config (contains API keys); see providers.example.json
+providers.json
