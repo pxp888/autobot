@@ -130,7 +130,10 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
     by_key = {c[0]: c for c in cands}
     req_model = body.get("model")
     if req_model and req_model in by_key:
-        return by_key[req_model], False  # explicit model wins, no routing
+        cand = by_key[req_model]
+        log_route(req_model, state, {}, "explicit", req_model, None, False,
+                  {"provider": cand[1], "model": cand[2]["id"]})  # pinned requests were invisible before
+        return cand, False  # explicit model wins, no routing
 
     criteria = {k: describe(pname, m, prov) for k, pname, m, prov in cands}
     fallback_key = next((k for k, _, m, _ in cands if m["id"] == cfg.get("defaultModel")), cands[0][0])
@@ -150,15 +153,18 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
         probs = average_probs(list(answers))
         key = max(probs, key=probs.get) if probs else fallback_key
         bad_answer = key not in by_key  # keys are ours, so this only fires on a malformed answer
+        cand = by_key[key]
         log_route(req_model, state, probs, " / ".join(a.get("choice", "?") for a in answers),
-                  key, None, bad_answer)
-        return by_key[key], bad_answer
+                  key, None, bad_answer, {"provider": cand[1], "model": cand[2]["id"]})
+        return cand, bad_answer
     except Exception as e:  # kev down / bad answer -> default model keeps the gateway alive
-        log_route(req_model, state, {}, f"fallback: {e.__class__.__name__}: {e}", fallback_key, None, True)
-        return by_key[fallback_key], True
+        cand = by_key[fallback_key]
+        log_route(req_model, state, {}, f"fallback: {e.__class__.__name__}: {e}", fallback_key, None, True,
+                  {"provider": cand[1], "model": cand[2]["id"]})
+        return cand, True
 
 
-def log_route(requested, state, probs, choice, picked, timing, fell_back):
+def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None):
     entry = {
         "ts": time.strftime("%H:%M:%S"),
         "requested": requested or "(auto)",
@@ -169,6 +175,8 @@ def log_route(requested, state, probs, choice, picked, timing, fell_back):
         "fallback": fell_back,
         "preview": state[:160].replace("\n", " "),
     }
+    if sent is not None:
+        entry["sent"] = sent  # exactly what forward() POSTs upstream: {provider, model}
     route_log.appendleft(entry)
     with LOG_PATH.open("a") as f:  # ponytail: one JSON line per decision, append-only; rotate if it ever gets big
         f.write(json.dumps(entry) + "\n")
@@ -324,10 +332,6 @@ def selftest() -> None:
     except httpx.ConnectError:
         pass
 
-    # explicit model bypasses routing (decide is async; check the fast path's contract)
-    got = asyncio.run(decide(cfg, {"model": "c"}, "anything"))
-    assert got[0][2]["id"] == "c" and got[0][3].get("apiKey") == "k", got
-
     # validation rejects garbage
     for bad in [{"providers": None}, {"providers": {"p": {}}}, {"providers": {"p": {"baseUrl": "u", "models": [{}]}}}]:
         try:
@@ -355,6 +359,13 @@ def selftest() -> None:
         try:
             log_route(None, "user:\nhello", {"a": 0.5}, "a", None, None, False)
             assert json.loads(LOG_PATH.read_text())["kev_choice"] == "a"
+
+            # explicit model bypasses routing (decide is async; check the fast path's contract)
+            got = asyncio.run(decide(cfg, {"model": "c"}, "anything"))
+            assert got[0][2]["id"] == "c" and got[0][3].get("apiKey") == "k", got
+            last = json.loads(LOG_PATH.read_text().splitlines()[-1])
+            assert last["requested"] == "c" and last["picked"] == "c" and not last["fallback"], last
+            assert last["sent"] == {"provider": "p2", "model": "c"}, last
         finally:
             LOG_PATH = old
 
