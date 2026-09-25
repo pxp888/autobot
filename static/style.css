@@ -1,0 +1,12 @@
+body{font:14px/1.5 ui-monospace,monospace;background:#111;color:#ddd;margin:2rem auto;max-width:960px}
+h1{font-size:1.3rem;font-weight:normal} h2{font-size:1rem;border-bottom:1px solid #333;padding-bottom:.25rem;margin-top:2rem}
+a{color:#7ab} table{border-collapse:collapse;width:100%}
+td,th{border:1px solid #333;padding:.4rem .6rem;text-align:left;vertical-align:top} th{background:#1a1a1a}
+.ok{color:#7d7}.bad{color:#d77}
+button{background:#245;border:0;color:#fff;padding:.3rem .9rem;cursor:pointer;margin-right:.4rem;font:inherit}
+button.danger{background:#633} .muted{color:#777;font-size:12px}
+.prov{border:1px solid #333;background:#161616;padding:.7rem 1rem;margin-bottom:1rem}
+.prov h3{margin:0 0 .5rem;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+label{display:block;font-size:12px;color:#9ab;margin-top:.45rem}
+input,select{width:100%;box-sizing:border-box;background:#0a0a0a;border:1px solid #333;color:#ddd;padding:.32rem .5rem;font:inherit;margin-top:.15rem}
+td input,td textarea{margin:0;resize:vertical} .rowbtn{white-space:nowrap}

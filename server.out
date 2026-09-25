@@ -1,0 +1,33 @@
+INFO:     Started server process [62513]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8010 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57786 - "GET /health HTTP/1.1" 200 OK
+INFO:     100.69.178.4:50588 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     100.69.178.4:58858 - "GET /slots HTTP/1.1" 404 Not Found
+INFO:     100.69.178.4:58870 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     100.69.178.4:58880 - "GET /slots HTTP/1.1" 404 Not Found
+INFO:     100.69.178.4:58884 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     100.69.178.4:58898 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     100.69.178.4:58906 - "GET /slots HTTP/1.1" 404 Not Found
+INFO:     100.69.178.4:58910 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     100.69.178.4:52608 - "GET /slots HTTP/1.1" 404 Not Found
+INFO:     100.69.178.4:52614 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     100.69.178.4:52628 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     100.69.178.4:57224 - "GET /slots HTTP/1.1" 404 Not Found
+INFO:     100.69.178.4:57236 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     100.69.178.4:57250 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41638 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51032 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56382 - "GET /health HTTP/1.1" 200 OK

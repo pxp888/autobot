@@ -1,0 +1,83 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>autobot</title>
+<link rel="stylesheet" href="/static/style.css"></head><body>
+<h1>autobot <span class="muted" id="status">loading…</span></h1>
+
+<h2>routing</h2>
+<label>Kev server address<input id="kevin"></label>
+<label>Fallback model (used when Kev is down or answers badly)<select id="defmodel"></select></label>
+
+<h2>providers</h2>
+<div id="provs"></div>
+<button onclick="addProvider()">+ add provider</button>
+
+<h2>save — writes {cfg_path}</h2>
+<button onclick="save()">Save config</button> <span class="muted" id="saved"></span>
+<script>
+const $ = s => document.querySelector(s);
+async function j(u, o) { const r = await fetch(u, o); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+let cfg = null;
+
+// form is the single source of truth in JS: inputs mutate cfg directly (no re-render while typing),
+// structural changes (add/remove) rebuild from cfg so nothing is lost.
+function render(){
+  $('#kevin').value = cfg.kevUrl || '';
+  const ids = Object.values(cfg.providers||{}).flatMap(p => (p.models||[]).map(m => m.id));
+  const sel = $('#defmodel');
+  sel.innerHTML = '<option value=""></option>' + ids.map(id => `<option>${esc(id)}</option>`).join('');
+  sel.value = cfg.defaultModel || '';
+  const box = $('#provs'); box.innerHTML = '';
+  for (const name of Object.keys(cfg.providers||{})) box.appendChild(provCard(name));
+}
+function provCard(name){
+  const p = cfg.providers[name];
+  const el = document.createElement('div'); el.className = 'prov';
+  el.innerHTML = `<h3><span>${esc(name)}</span>
+      <button class="danger" onclick="delProvider('${esc(name)}')">delete</button></h3>
+    <label>base url<input data-pf="baseUrl"></label>
+    <label>api type<input data-pf="api"></label>
+    <label>api key<input data-pf="apiKey"></label>
+    <label>description (fed to Kev for routing)<input data-pf="description"></label>
+    <table><thead><tr><th style="width:38%">model id</th><th>description — what it's good at, this is the routing signal</th><th></th></tr></thead>
+      <tbody>${(p.models||[]).map((m,i) => `<tr>
+        <td><input data-m="${i}" data-mf="id"></td>
+        <td><textarea data-m="${i}" data-mf="description" rows="2" placeholder="none — kev can't tell it apart"></textarea></td>
+        <td class="rowbtn"><button class="danger" onclick="delModel('${esc(name)}',${i})">×</button></td></tr>`).join('')}</tbody></table>
+    <button onclick="addModel('${esc(name)}')">+ add model</button>`;
+  for (const f of ['baseUrl','api','apiKey','description']){
+    const inp = el.querySelector(`[data-pf="${f}"]`);
+    inp.value = p[f] || '';
+    inp.oninput = () => { p[f] = inp.value; };
+  }
+  for (const row of el.querySelectorAll('[data-mf]')){
+    const m = p.models[+row.dataset.m], f = row.dataset.mf;
+    row.value = m[f] || '';
+    row.oninput = () => { m[f] = row.value; };
+  }
+  return el;
+}
+function addProvider(){
+  const name = prompt('provider name'); if (!name) return;
+  if (cfg.providers[name]) { alert(name + ' already exists'); return; }
+  cfg.providers[name] = { baseUrl: '', models: [{ id: '' }] };
+  render();
+}
+function delProvider(name){ if (confirm('delete provider ' + name + '?')) { delete cfg.providers[name]; render(); } }
+function addModel(name){ cfg.providers[name].models.push({ id: '' }); render(); }
+function delModel(name, i){ cfg.providers[name].models.splice(i, 1); render(); }
+
+async function save(){
+  try { await j('/api/config', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg) });
+        $('#saved').textContent = 'saved ' + new Date().toTimeString().slice(0,8); $('#saved').className = 'muted'; }
+  catch(e){ $('#saved').textContent = String(e.message || e); $('#saved').className = 'bad'; }
+}
+async function refresh(){
+  const h = await j('/health');
+  $('#status').innerHTML = h.kev_up ? '<span class="ok">kev up</span>' : '<span class="bad">kev down</span> @ ' + esc(h.kev_url);
+}
+(async () => {
+  cfg = await j('/api/config');
+  render(); refresh(); setInterval(refresh, 5000);
+})();
+</script></body></html>

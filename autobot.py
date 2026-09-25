@@ -14,10 +14,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 KEV_URL = os.environ.get("KEV_URL", "http://192.168.0.189:8009").rstrip("/")
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(Path(__file__).parent / "providers.json")))
+LOG_PATH = Path(os.environ.get("KEV_LOG_PATH", str(Path(__file__).parent / "log.txt")))
 # ponytail: ~4 chars/token heuristic instead of a real tokenizer. Routing looks at the LAST
 # ~1000 tokens — what's being asked now, not how the conversation started.
 STATE_CHARS = 4000
@@ -26,6 +28,7 @@ KEV_TIMEOUT = float(os.environ.get("KEV_TIMEOUT_SECS", "15"))
 UPSTREAM_TIMEOUT = httpx.Timeout(float(os.environ.get("TIMEOUT_SECS", "300")), connect=15)
 
 app = FastAPI(title="autobot")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 route_log: deque[dict] = deque(maxlen=200)
 
 
@@ -101,9 +104,9 @@ def average_probs(answers: list[dict]) -> dict:
     return probs
 
 
-async def kev_question(client: httpx.AsyncClient, state: str, criteria: dict) -> dict:
+async def kev_question(client: httpx.AsyncClient, state: str, criteria: dict, url: str) -> dict:
     r = await client.post(
-        f"{kev_url(cfg)}/v1/systemone",
+        f"{url}/v1/systemone",
         json={
             "state": state,
             "questions": {
@@ -136,13 +139,14 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
             # ponytail: this Kev checkpoint has a strong last-option position bias (verified via /permute:
             # argmax flips between orders). Two concurrent passes — normal + reversed order — and averaging
             # the probabilities cancels it; wall time stays ~one pass.
+            url = kev_url(cfg)
             if len(criteria) > 1:
                 answers = await asyncio.gather(
-                    kev_question(client, state, criteria),
-                    kev_question(client, state, dict(reversed(list(criteria.items())))),
+                    kev_question(client, state, criteria, url),
+                    kev_question(client, state, dict(reversed(list(criteria.items()))), url),
                 )
             else:
-                answers = [await kev_question(client, state, criteria)]
+                answers = [await kev_question(client, state, criteria, url)]
         probs = average_probs(list(answers))
         key = max(probs, key=probs.get) if probs else fallback_key
         bad_answer = key not in by_key  # keys are ours, so this only fires on a malformed answer
@@ -155,7 +159,7 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
 
 
 def log_route(requested, state, probs, choice, picked, timing, fell_back):
-    route_log.appendleft({
+    entry = {
         "ts": time.strftime("%H:%M:%S"),
         "requested": requested or "(auto)",
         "picked": picked,
@@ -164,7 +168,10 @@ def log_route(requested, state, probs, choice, picked, timing, fell_back):
         "timing": timing,
         "fallback": fell_back,
         "preview": state[:160].replace("\n", " "),
-    })
+    }
+    route_log.appendleft(entry)
+    with LOG_PATH.open("a") as f:  # ponytail: one JSON line per decision, append-only; rotate if it ever gets big
+        f.write(json.dumps(entry) + "\n")
 
 
 # ---------- upstream forwarding ----------
@@ -273,108 +280,10 @@ async def get_routes():
 
 # ---------- web UI (controls: edit the config) ----------
 
-UI = """<!doctype html>
-<html><head><meta charset="utf-8"><title>autobot</title>
-<style>
- body{font:14px/1.5 ui-monospace,monospace;background:#111;color:#ddd;margin:2rem auto;max-width:960px}
- h1{font-size:1.3rem;font-weight:normal} h2{font-size:1rem;border-bottom:1px solid #333;padding-bottom:.25rem;margin-top:2rem}
- a{color:#7ab} table{border-collapse:collapse;width:100%}
- td,th{border:1px solid #333;padding:.4rem .6rem;text-align:left;vertical-align:top} th{background:#1a1a1a}
- .ok{color:#7d7}.bad{color:#d77}
- button{background:#245;border:0;color:#fff;padding:.3rem .9rem;cursor:pointer;margin-right:.4rem;font:inherit}
- button.danger{background:#633} .muted{color:#777;font-size:12px}
- .prov{border:1px solid #333;background:#161616;padding:.7rem 1rem;margin-bottom:1rem}
- .prov h3{margin:0 0 .5rem;font-size:14px;display:flex;justify-content:space-between;align-items:center}
- label{display:block;font-size:12px;color:#9ab;margin-top:.45rem}
- input,select{width:100%;box-sizing:border-box;background:#0a0a0a;border:1px solid #333;color:#ddd;padding:.32rem .5rem;font:inherit;margin-top:.15rem}
- td input,td textarea{margin:0;resize:vertical} .rowbtn{white-space:nowrap}
-</style></head><body>
-<h1>autobot <span class="muted" id="status">loading…</span></h1>
-
-<h2>routing</h2>
-<label>Kev server address<input id="kevin"></label>
-<label>Fallback model (used when Kev is down or answers badly)<select id="defmodel"></select></label>
-
-<h2>providers</h2>
-<div id="provs"></div>
-<button onclick="addProvider()">+ add provider</button>
-
-<h2>save — writes {cfg_path}</h2>
-<button onclick="save()">Save config</button> <span class="muted" id="saved"></span>
-<script>
-const $ = s => document.querySelector(s);
-async function j(u, o) { const r = await fetch(u, o); if (!r.ok) throw new Error(await r.text()); return r.json(); }
-function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-let cfg = null;
-
-// form is the single source of truth in JS: inputs mutate cfg directly (no re-render while typing),
-// structural changes (add/remove) rebuild from cfg so nothing is lost.
-function render(){
-  $('#kevin').value = cfg.kevUrl || '';
-  const ids = Object.values(cfg.providers||{}).flatMap(p => (p.models||[]).map(m => m.id));
-  const sel = $('#defmodel');
-  sel.innerHTML = '<option value=""></option>' + ids.map(id => `<option>${esc(id)}</option>`).join('');
-  sel.value = cfg.defaultModel || '';
-  const box = $('#provs'); box.innerHTML = '';
-  for (const name of Object.keys(cfg.providers||{})) box.appendChild(provCard(name));
-}
-function provCard(name){
-  const p = cfg.providers[name];
-  const el = document.createElement('div'); el.className = 'prov';
-  el.innerHTML = `<h3><span>${esc(name)}</span>
-      <button class="danger" onclick="delProvider('${esc(name)}')">delete</button></h3>
-    <label>base url<input data-pf="baseUrl"></label>
-    <label>api type<input data-pf="api"></label>
-    <label>api key<input data-pf="apiKey"></label>
-    <label>description (fed to Kev for routing)<input data-pf="description"></label>
-    <table><thead><tr><th style="width:38%">model id</th><th>description — what it's good at, this is the routing signal</th><th></th></tr></thead>
-      <tbody>${(p.models||[]).map((m,i) => `<tr>
-        <td><input data-m="${i}" data-mf="id"></td>
-        <td><textarea data-m="${i}" data-mf="description" rows="2" placeholder="none — kev can't tell it apart"></textarea></td>
-        <td class="rowbtn"><button class="danger" onclick="delModel('${esc(name)}',${i})">×</button></td></tr>`).join('')}</tbody></table>
-    <button onclick="addModel('${esc(name)}')">+ add model</button>`;
-  for (const f of ['baseUrl','api','apiKey','description']){
-    const inp = el.querySelector(`[data-pf="${f}"]`);
-    inp.value = p[f] || '';
-    inp.oninput = () => { p[f] = inp.value; };
-  }
-  for (const row of el.querySelectorAll('[data-mf]')){
-    const m = p.models[+row.dataset.m], f = row.dataset.mf;
-    row.value = m[f] || '';
-    row.oninput = () => { m[f] = row.value; };
-  }
-  return el;
-}
-function addProvider(){
-  const name = prompt('provider name'); if (!name) return;
-  if (cfg.providers[name]) { alert(name + ' already exists'); return; }
-  cfg.providers[name] = { baseUrl: '', models: [{ id: '' }] };
-  render();
-}
-function delProvider(name){ if (confirm('delete provider ' + name + '?')) { delete cfg.providers[name]; render(); } }
-function addModel(name){ cfg.providers[name].models.push({ id: '' }); render(); }
-function delModel(name, i){ cfg.providers[name].models.splice(i, 1); render(); }
-
-async function save(){
-  try { await j('/api/config', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg) });
-        $('#saved').textContent = 'saved ' + new Date().toTimeString().slice(0,8); $('#saved').className = 'muted'; }
-  catch(e){ $('#saved').textContent = String(e.message || e); $('#saved').className = 'bad'; }
-}
-async function refresh(){
-  const h = await j('/health');
-  $('#status').innerHTML = h.kev_up ? '<span class="ok">kev up</span>' : '<span class="bad">kev down</span> @ ' + esc(h.kev_url);
-}
-(async () => {
-  cfg = await j('/api/config');
-  render(); refresh(); setInterval(refresh, 5000);
-})();
-</script></body></html>"""
-
-
-
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def index():
-    return UI.replace("{cfg_path}", str(CONFIG_PATH))
+    html = (Path(__file__).parent / "static" / "index.html").read_text()
+    return PlainTextResponse(html.replace("{cfg_path}", str(CONFIG_PATH)), media_type="text/html")
 
 
 # ---------- selftest: no server or kev needed ----------
@@ -407,8 +316,15 @@ def selftest() -> None:
         "p2": {"baseUrl": "v", "models": [{"id": "m"}, {"id": "n"}]}}}
     assert len(candidates(dup)) == 3
 
+    # kev_question posts to the given url (regression: it read a non-existent global cfg ->
+    # NameError swallowed into fallback on every request)
+    try:
+        asyncio.run(kev_question(httpx.AsyncClient(timeout=1), "s", {"a": "d"}, "http://127.0.0.1:9"))
+        assert False, "should fail to connect"
+    except httpx.ConnectError:
+        pass
+
     # explicit model bypasses routing (decide is async; check the fast path's contract)
-    import asyncio
     got = asyncio.run(decide(cfg, {"model": "c"}, "anything"))
     assert got[0][2]["id"] == "c" and got[0][3].get("apiKey") == "k", got
 
@@ -431,6 +347,16 @@ def selftest() -> None:
             assert load_config()["providers"]["p1"]["models"][0]["id"] == "a"
         finally:
             CONFIG_PATH = old
+
+    # decisions land in log.txt (one JSON line each), including the fallback path
+    global LOG_PATH
+    with tempfile.TemporaryDirectory() as d2:
+        old, LOG_PATH = LOG_PATH, Path(d2) / "log.txt"
+        try:
+            log_route(None, "user:\nhello", {"a": 0.5}, "a", None, None, False)
+            assert json.loads(LOG_PATH.read_text())["kev_choice"] == "a"
+        finally:
+            LOG_PATH = old
 
     print("selftest ok")
 

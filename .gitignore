@@ -4,3 +4,4 @@ __pycache__/
 
 # real provider config (contains API keys); see providers.example.json
 providers.json
+log.txt
