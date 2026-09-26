@@ -144,10 +144,15 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
         raise ValueError("no models configured")
     by_key = {c[0]: c for c in cands}
     req_model = body.get("model")
+    tool_names = []  # ponytail: log what the client actually sent; Kev never sees tools[] so this is
+    # the only place to tell whether two "same" requests had different tool sets (harness MCP loading)
+    for t in body.get("tools") or []:
+        if isinstance(t, dict) and isinstance(t.get("function"), dict):
+            tool_names.append(t["function"].get("name"))
     if req_model and req_model in by_key:
         cand = by_key[req_model]
         log_route(req_model, state, {}, "explicit", req_model, None, False,
-                  {"provider": cand[1], "model": cand[2]["id"]})  # pinned requests were invisible before
+                  {"provider": cand[1], "model": cand[2]["id"]}, tools=tool_names)  # pinned requests were invisible before
         return cand, False  # explicit model wins, no routing
 
     criteria = {k: describe(pname, m, prov) for k, pname, m, prov in cands}
@@ -173,16 +178,17 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
         cand = by_key[key]
         log_route(req_model, state, probs, " / ".join(a.get("choice", "?") for a in answers),
                   key, None, bad_answer, {"provider": cand[1], "model": cand[2]["id"]},
-                  effectives=effective)
+                  effectives=effective, tools=tool_names)
         return cand, bad_answer
     except Exception as e:  # kev down / bad answer -> default model keeps the gateway alive
         cand = by_key[fallback_key]
         log_route(req_model, state, {}, f"fallback: {e.__class__.__name__}: {e}", fallback_key, None, True,
-                  {"provider": cand[1], "model": cand[2]["id"]})
+                  {"provider": cand[1], "model": cand[2]["id"]}, tools=tool_names)
         return cand, True
 
 
-def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None, effectives=None):
+def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None, effectives=None,
+              tools=None):
     entry = {
         "ts": time.strftime("%H:%M:%S"),
         "requested": requested or "(auto)",
@@ -195,6 +201,8 @@ def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=N
     }
     if effectives is not None:
         entry["effective"] = {k: round(v, 3) for k, v in effectives.items()}
+    if tools is not None:
+        entry["tools"] = tools
     if sent is not None:
         entry["sent"] = sent  # exactly what forward() POSTs upstream: {provider, model}
     route_log.appendleft(entry)
@@ -260,8 +268,16 @@ async def chat_completions(request: Request):
 @app.get("/v1/models")
 async def list_models():
     cfg = load_config()
-    # 'auto' is advertised so harnesses that only pick from /v1/models can opt into Kev routing
-    data = [{"id": "auto", "object": "model", "created": 0, "owned_by": "autobot (kev-routed)"}]
+    # 'auto' is advertised so harnesses that only pick from /v1/models can opt into Kev routing.
+    # The second id embeds a capability keyword ON PURPOSE: Odysseus sniffs native tool-calling
+    # support from the model string (agent_loop.py _model_supports_tools); "auto" matches nothing,
+    # so it fell back to fenced-block prompt mode for every routed turn. Both ids route identically
+    # through Kev (any unknown id is a routing request). Pick qwen3-auto in tool-using harnesses;
+    # if you ever route a model that lacks function calling, pin it explicitly instead.
+    data = [
+        {"id": "qwen3-auto", "object": "model", "created": 0, "owned_by": "autobot (kev-routed, native tools)"},
+        {"id": "auto", "object": "model", "created": 0, "owned_by": "autobot (kev-routed)"},
+    ]
     data += [{"id": m["id"], "object": "model", "created": 0, "owned_by": pname}
              for _key, pname, m, _prov in candidates(cfg)]
     return {"object": "list", "data": data}
