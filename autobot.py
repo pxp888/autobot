@@ -52,9 +52,9 @@ def validate_config(cfg) -> None:
         for m in prov["models"]:
             if not isinstance(m, dict) or not m.get("id"):
                 raise ValueError(f'provider "{name}": every model needs an id')
-            h = m.get("handicap")
-            if h is not None and (isinstance(h, bool) or not isinstance(h, (int, float))):
-                raise ValueError(f'provider "{name}"/{m["id"]}: handicap must be a number')
+            w = m.get("weight")
+            if w is not None and (isinstance(w, bool) or not isinstance(w, (int, float))):
+                raise ValueError(f'provider "{name}"/{m["id"]}: weight must be a number')
 
 
 # ---------- routing decision ----------
@@ -90,13 +90,13 @@ def candidates(cfg) -> list[tuple[str, str, dict, dict]]:
     return out
 
 
-def model_handicap(model: dict) -> float:
+def model_weight(model: dict) -> float:
     """Per-model multiplier on routing probability (steering knob). 1 = neutral."""
-    h = model.get("handicap", 1)
-    if isinstance(h, bool):
+    w = model.get("weight", 1)
+    if isinstance(w, bool):
         return 1.0
     try:
-        v = float(h)
+        v = float(w)
         return v if not (v != v) else 1.0  # NaN guard
     except (TypeError, ValueError):
         return 1.0
@@ -171,8 +171,8 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
             else:
                 answers = [await kev_question(client, state, criteria, url)]
         probs = average_probs(list(answers))
-        # apply per-model handicap (steering knob) before picking argmax
-        effective = {k: probs[k] * model_handicap(by_key.get(k, (None,))[2]) for k in probs}
+        # apply per-model weight (steering knob) before picking argmax
+        effective = {k: probs[k] * model_weight(by_key.get(k, (None,))[2]) for k in probs}
         key = max(effective, key=effective.get) if effective else fallback_key
         bad_answer = key not in by_key  # keys are ours, so this only fires on a malformed answer
         cand = by_key[key]
@@ -400,11 +400,11 @@ def selftest() -> None:
             got = asyncio.run(decide(cfg, {"model": "c"}, "anything"))
             assert got[0][2]["id"] == "c" and got[0][3].get("apiKey") == "k", got
 
-            # handicap: multiplier on routing probability; default 1.0 for no-op models
-            assert model_handicap({}) == 1.0
-            assert model_handicap({"handicap": 2.0}) == 2.0
-            assert model_handicap({"handicap": "garbage"}) == 1.0
-            assert model_handicap({"handicap": True}) == 1.0
+            # weight: multiplier on routing probability; default 1.0 for no-op models
+            assert model_weight({}) == 1.0
+            assert model_weight({"weight": 2.0}) == 2.0
+            assert model_weight({"weight": "garbage"}) == 1.0
+            assert model_weight({"weight": True}) == 1.0
             last = json.loads(LOG_PATH.read_text().splitlines()[-1])
             assert last["requested"] == "c" and last["picked"] == "c" and not last["fallback"], last
             assert last["sent"] == {"provider": "p2", "model": "c"}, last

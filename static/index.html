@@ -39,11 +39,11 @@ function provCard(name){
     <label>api type<input data-pf="api"></label>
     <label>api key<input data-pf="apiKey"></label>
     <label>description (fed to Kev for routing)<input data-pf="description"></label>
-    <table><thead><tr><th style="width:30%">model id</th><th>description — what it's good at, this is the routing signal</th><th style="width:75px">handicap</th><th></th></tr></thead>
+    <table><thead><tr><th style="width:30%">model id</th><th>description — what it's good at, this is the routing signal</th><th style="width:75px">weight</th><th></th></tr></thead>
       <tbody>${(p.models||[]).map((m,i) => `<tr>
         <td><input data-m="${i}" data-mf="id"></td>
         <td><textarea data-m="${i}" data-mf="description" rows="2" placeholder="none — kev can't tell it apart"></textarea></td>
-        <td><input type="number" step="0.1" min="0" data-m="${i}" data-mf="handicap" value="${m.handicap !== undefined && m.handicap !== null ? esc(m.handicap) : '1'}" title="multiplier on routing probability (1 = neutral)"></td>
+        <td><input type="number" step="0.1" min="0" data-m="${i}" data-mf="weight" value="${m.weight !== undefined && m.weight !== null ? esc(m.weight) : '1'}" title="multiplier on routing probability (1 = neutral)"></td>
         <td class="rowbtn"><button class="danger" onclick="delModel('${esc(name)}',${i})">×</button></td></tr>`).join('')}</tbody></table>
     <button onclick="addModel('${esc(name)}')">+ add model</button>`;
   for (const f of ['baseUrl','api','apiKey','description']){
@@ -53,11 +53,11 @@ function provCard(name){
   }
   for (const row of el.querySelectorAll('[data-mf]')){
     const m = p.models[+row.dataset.m], f = row.dataset.mf;
-    if (f === 'handicap'){ // keep cfg clean: only persist when it's not the default
+    if (f === 'weight'){ // keep cfg clean: only persist when it's not the default
       row.oninput = () => {
-        delete m.handicap;
+        delete m.weight;
         const v = parseFloat(row.value);
-        if (!Number.isNaN(v) && v !== 1) m.handicap = v;
+        if (!Number.isNaN(v) && v !== 1) m.weight = v;
       };
     } else {
       row.value = m[f] || '';
