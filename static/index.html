@@ -27,6 +27,7 @@ function render(){
   const sel = $('#defmodel');
   sel.innerHTML = '<option value=""></option>' + ids.map(id => `<option>${esc(id)}</option>`).join('');
   sel.value = cfg.defaultModel || '';
+  sel.onchange = () => { cfg.defaultModel = sel.value; };
   const box = $('#provs'); box.innerHTML = '';
   for (const name of Object.keys(cfg.providers||{})) box.appendChild(provCard(name));
 }
