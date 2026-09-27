@@ -177,7 +177,7 @@ tr:nth-child(even) { background: #f9fafb; }
 
 .prov h3 span {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 2rem;
 }
 
 /* Form fields within provider */
