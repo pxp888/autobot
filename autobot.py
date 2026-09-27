@@ -22,7 +22,7 @@ CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(Path(__file__).parent / "pr
 LOG_PATH = Path(os.environ.get("KEV_LOG_PATH", str(Path(__file__).parent / "log.txt")))
 # ponytail: ~4 chars/token heuristic instead of a real tokenizer. Routing looks at the LAST
 # ~500 tokens — what's being asked now, not how the conversation started.
-STATE_CHARS = int(os.environ.get("STATE_CHARS", "2000"))  # was 4000
+STATE_CHARS = int(os.environ.get("STATE_CHARS", "3000"))  # was 4000, then 2000
 KEV_TIMEOUT = float(os.environ.get("KEV_TIMEOUT_SECS", "15"))
 # ponytail: one global read timeout for upstreams (code-gen can be slow); per-provider override later if needed
 UPSTREAM_TIMEOUT = httpx.Timeout(float(os.environ.get("TIMEOUT_SECS", "300")), connect=15)
@@ -31,6 +31,7 @@ app = FastAPI(title="autobot")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 route_log: deque[dict] = deque(maxlen=200)
 model_token_counts: dict[str, int] = {}  # in-memory: model_key -> cumulative prompt tokens since startup
+model_request_counts: dict[str, int] = {}  # in-memory: model_key -> cumulative request count since startup
 
 
 def count_tokens(text: str) -> int:
@@ -268,9 +269,10 @@ async def chat_completions(request: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
-    # count prompt tokens for the model that was picked
+    # count prompt tokens and requests for the model that was picked
     key = cand[0]
     model_token_counts[key] = model_token_counts.get(key, 0) + count_tokens(state)
+    model_request_counts[key] = model_request_counts.get(key, 0) + 1
 
     return await forward(cfg, body, cand)
 
@@ -329,8 +331,15 @@ async def save_config(request: Request):
 
 @app.get("/api/token-counts")
 async def get_token_counts():
-    """In-memory cumulative prompt tokens per model since startup."""
-    return {"counts": dict(model_token_counts), "total": sum(model_token_counts.values())}
+    """In-memory cumulative prompt tokens and request counts per model since startup."""
+    counts = dict(model_token_counts)
+    req_counts = dict(model_request_counts)
+    # ensure all counted models appear in both
+    for k in req_counts:
+        counts.setdefault(k, counts.get(k, 0))
+    req_total = sum(req_counts.values())
+    token_total = sum(counts.values())
+    return {"counts": counts, "total_tokens": token_total, "requests": req_counts, "total_requests": req_total}
 
 
 @app.get("/api/routes")

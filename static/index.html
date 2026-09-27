@@ -87,12 +87,14 @@ async function refresh(){
 async function loadTokens(){
   try {
     const t = await j('/api/token-counts');
-    $('#token-total').textContent = t.total > 0 ? '(' + t.total.toLocaleString() + ' total)' : '';
-    if (Object.keys(t.counts).length === 0) { $('#tok-box').innerHTML = '<p class="muted">no requests yet</p>'; return; }
-    const rows = Object.entries(t.counts)
+    // display total request count in header
+    $('#token-total').textContent = t.total_requests > 0 ? '(' + t.total_requests.toLocaleString() + ' requests)' : '';
+    // display per-model token and request counts
+    if (Object.keys(t.requests).length === 0) { $('#tok-box').innerHTML = '<p class="muted">no requests yet</p>'; return; }
+    const rows = Object.entries(t.requests)
       .sort((a,b) => b[1]-a[1])
-      .map(([k,v]) => `<tr><td>${esc(k)}</td><td style="text-align:right">${v.toLocaleString()}</td></tr>`).join('');
-    $('#tok-box').innerHTML = '<table><thead><tr><th>model</th><th style="text-align:right">prompt tokens (since startup)</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      .map(([k,v]) => `<tr><td>${esc(k)}</td><td style="text-align:right">${v.toLocaleString()}</td><td style="text-align:right">${(t.counts[k] || 0).toLocaleString()}</td></tr>`).join('');
+    $('#tok-box').innerHTML = '<table><thead><tr><th>model</th><th style="text-align:right">requests</th><th style="text-align:right">prompt tokens</th></tr></thead><tbody>' + rows + '</tbody></table>';
   } catch(e){ /* ignore */ }
 }
 (async () => {
