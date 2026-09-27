@@ -3,6 +3,9 @@
 <link rel="stylesheet" href="/static/style.css"></head><body>
 <h1>autobot <span class="muted" id="status" data-od-id="status">loading…</span></h1>
 
+<h2 data-od-id="token-usage">token usage <span class="muted" id="token-total">—</span></h2>
+<div id="tok-box"><p class="muted">no requests yet</p></div>
+
 <h2 data-od-id="routing">routing</h2>
 <label>Kev server address<input id="kevin" data-od-id="kev-server"></label>
 <label>Fallback model (used when Kev is down or answers badly)<select id="defmodel" data-od-id="default-model"></select></label>
@@ -81,8 +84,20 @@ async function refresh(){
   const h = await j('/health');
   $('#status').innerHTML = h.kev_up ? '<span class="ok">kev up</span>' : '<span class="bad">kev down</span> @ ' + esc(h.kev_url);
 }
+async function loadTokens(){
+  try {
+    const t = await j('/api/token-counts');
+    $('#token-total').textContent = t.total > 0 ? '(' + t.total.toLocaleString() + ' total)' : '';
+    if (Object.keys(t.counts).length === 0) { $('#tok-box').innerHTML = '<p class="muted">no requests yet</p>'; return; }
+    const rows = Object.entries(t.counts)
+      .sort((a,b) => b[1]-a[1])
+      .map(([k,v]) => `<tr><td>${esc(k)}</td><td style="text-align:right">${v.toLocaleString()}</td></tr>`).join('');
+    $('#tok-box').innerHTML = '<table><thead><tr><th>model</th><th style="text-align:right">prompt tokens (since startup)</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch(e){ /* ignore */ }
+}
 (async () => {
   cfg = await j('/api/config');
-  render(); refresh(); setInterval(refresh, 5000);
+  render(); refresh(); loadTokens();
+  setInterval(() => { refresh(); loadTokens(); }, 10000);
 })();
 </script></body></html>

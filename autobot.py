@@ -30,6 +30,7 @@ UPSTREAM_TIMEOUT = httpx.Timeout(float(os.environ.get("TIMEOUT_SECS", "300")), c
 app = FastAPI(title="autobot")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 route_log: deque[dict] = deque(maxlen=200)
+model_token_counts: dict[str, int] = {}  # in-memory: model_key -> cumulative prompt tokens since startup
 
 
 def count_tokens(text: str) -> int:
@@ -261,10 +262,16 @@ async def chat_completions(request: Request):
     if not isinstance(body.get("messages"), list) or not body["messages"]:
         return JSONResponse({"error": "messages[] is required"}, status_code=400)
     cfg = load_config()  # ponytail: re-read file per request; live config edits, no reload logic
+    state = build_state(body["messages"])
     try:
-        cand, _fell_back = await decide(cfg, body, build_state(body["messages"]))
+        cand, _fell_back = await decide(cfg, body, state)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
+
+    # count prompt tokens for the model that was picked
+    key = cand[0]
+    model_token_counts[key] = model_token_counts.get(key, 0) + count_tokens(state)
+
     return await forward(cfg, body, cand)
 
 
@@ -318,6 +325,12 @@ async def save_config(request: Request):
     tmp.write_text(json.dumps(cfg, indent=2))  # atomic-ish swap so readers never see a half file
     tmp.replace(CONFIG_PATH)
     return cfg
+
+
+@app.get("/api/token-counts")
+async def get_token_counts():
+    """In-memory cumulative prompt tokens per model since startup."""
+    return {"counts": dict(model_token_counts), "total": sum(model_token_counts.values())}
 
 
 @app.get("/api/routes")
