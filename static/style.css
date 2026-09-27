@@ -1,12 +1,224 @@
-body{font:14px/1.5 ui-monospace,monospace;background:#111;color:#ddd;margin:2rem auto;max-width:960px}
-h1{font-size:1.3rem;font-weight:normal} h2{font-size:1rem;border-bottom:1px solid #333;padding-bottom:.25rem;margin-top:2rem}
-a{color:#7ab} table{border-collapse:collapse;width:100%}
-td,th{border:1px solid #333;padding:.4rem .6rem;text-align:left;vertical-align:top} th{background:#1a1a1a}
-.ok{color:#7d7}.bad{color:#d77}
-button{background:#245;border:0;color:#fff;padding:.3rem .9rem;cursor:pointer;margin-right:.4rem;font:inherit}
-button.danger{background:#633} .muted{color:#777;font-size:12px}
-.prov{border:1px solid #333;background:#161616;padding:.7rem 1rem;margin-bottom:1rem}
-.prov h3{margin:0 0 .5rem;font-size:14px;display:flex;justify-content:space-between;align-items:center}
-label{display:block;font-size:12px;color:#9ab;margin-top:.45rem}
-input,select{width:100%;box-sizing:border-box;background:#0a0a0a;border:1px solid #333;color:#ddd;padding:.32rem .5rem;font:inherit;margin-top:.15rem}
-td input,td textarea{margin:0;resize:vertical;width:100%;min-height:4rem} .rowbtn{white-space:nowrap}
+/* Clean, clear, calm, minimal styling for autobot config UI */
+
+/* Variables for the design system */
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --fg: #212121;
+  --muted: #666666;
+  --border: #e0e0e0;
+  --accent: #3b82f6;
+}
+
+/* Page container */
+body {
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  margin: 2rem auto;
+  max-width: 960px;
+  padding: 0 1rem;
+}
+
+/* Headings */
+h1 {
+  font-size: 1.8rem;
+  font-weight: 600;
+  margin-bottom: 1.5rem;
+  color: var(--fg);
+}
+
+h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 2rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+
+/* Basic text elements */
+a { color: var(--accent); text-decoration: underline; }
+a:hover { color: #2563eb; }
+
+/* Status indicators */
+.ok { color: #059669; }
+.bad { color: #dc2626; }
+.muted { color: var(--muted); font-size: 0.875rem; }
+
+/* Buttons */
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  padding: 0.5rem 0.75rem;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+button:hover {
+  border-color: var(--accent);
+  background: #eff6ff;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button.danger {
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+button.danger:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
+button:not(.danger):not(.primary):active {
+  background: #f3f4f6;
+  transform: scale(0.98);
+}
+
+/* Primary CTA - used once per page */
+button.primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+button.primary:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+/* Form inputs */
+label {
+  display: block;
+  font-size: 0.875rem;
+  margin-top: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+input, select {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font: inherit;
+  transition: border-color 0.2s;
+}
+
+input:hover, select:hover {
+  border-color: var(--border);
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #eff6ff;
+}
+
+input::placeholder, select::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* Table styling */
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+
+th {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+tr:hover {
+  background: #f8fafc;
+}
+
+td, th {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+}
+
+tr:nth-child(even) { background: #f9fafb; }
+
+/* Provider card */
+.prov {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.prov h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.prov h3 span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* Form fields within provider */
+.prov input, .prov select {
+  margin-top: 0.375rem;
+  margin-bottom: 0.25rem;
+}
+
+.prov td input, .prov td textarea {
+  margin: 0;
+}
+
+/* Input types */
+input[data-pf], textarea[data-mf] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M2 5l6 6 6-6' stroke='%23666' stroke-width='2'/%3E%3C/svg");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2rem;
+}
+
+/* Buttons within provider cards */
+.prov .rowbtn {
+  white-space: nowrap;
+  margin-left: 0.25rem;
+}
+
+/* Response display */
+#saved {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* No providers message */
+#provs.empty {
+  color: var(--muted);
+  padding: 2rem;
+  text-align: center;
+}
