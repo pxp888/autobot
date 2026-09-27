@@ -4,6 +4,7 @@
 <h1>autobot <span class="muted" id="status" data-od-id="status">loading…</span></h1>
 
 <h2 data-od-id="token-usage">token usage <span class="muted" id="token-total">—</span></h2>
+<p class="muted"><span id="prompt-total">—</span> prompt tokens, <span id="completion-total">—</span> completion tokens</p>
 <div id="tok-box"><p class="muted">no requests yet</p></div>
 
 <h2 data-od-id="routing">routing</h2>
@@ -89,12 +90,15 @@ async function loadTokens(){
     const t = await j('/api/token-counts');
     // display total request count in header
     $('#token-total').textContent = t.total_requests > 0 ? '(' + t.total_requests.toLocaleString() + ' requests)' : '';
+    // display total prompt and completion tokens
+    $('#prompt-total').textContent = t.total_prompt_tokens > 0 ? t.total_prompt_tokens.toLocaleString() : '0';
+    $('#completion-total').textContent = t.total_completion_tokens > 0 ? t.total_completion_tokens.toLocaleString() : '0';
     // display per-model token and request counts
     if (Object.keys(t.requests).length === 0) { $('#tok-box').innerHTML = '<p class="muted">no requests yet</p>'; return; }
     const rows = Object.entries(t.requests)
       .sort((a,b) => b[1]-a[1])
-      .map(([k,v]) => `<tr><td>${esc(k)}</td><td style="text-align:right">${v.toLocaleString()}</td><td style="text-align:right">${(t.counts[k] || 0).toLocaleString()}</td></tr>`).join('');
-    $('#tok-box').innerHTML = '<table><thead><tr><th>model</th><th style="text-align:right">requests</th><th style="text-align:right">prompt tokens</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      .map(([k,v]) => `<tr><td>${esc(k)}</td><td style="text-align:right">${v.toLocaleString()}</td><td style="text-align:right">${t.prompt_counts[k] || 0}</td><td style="text-align:right">${t.completion_counts[k] || 0}</td></tr>`).join('');
+    $('#tok-box').innerHTML = '<table><thead><tr><th>model</th><th style="text-align:right">requests</th><th style="text-align:right">prompt tokens</th><th style="text-align:right">completion tokens</th></tr></thead><tbody>' + rows + '</tbody></table>';
   } catch(e){ /* ignore */ }
 }
 (async () => {
