@@ -21,8 +21,8 @@ KEV_URL = os.environ.get("KEV_URL", "http://192.168.0.189:8009").rstrip("/")
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(Path(__file__).parent / "providers.json")))
 LOG_PATH = Path(os.environ.get("KEV_LOG_PATH", str(Path(__file__).parent / "log.txt")))
 # ponytail: ~4 chars/token heuristic instead of a real tokenizer. Routing looks at the LAST
-# ~1000 tokens — what's being asked now, not how the conversation started.
-STATE_CHARS = 4000
+# ~500 tokens — what's being asked now, not how the conversation started.
+STATE_CHARS = int(os.environ.get("STATE_CHARS", "2000"))  # was 4000
 KEV_TIMEOUT = float(os.environ.get("KEV_TIMEOUT_SECS", "15"))
 # ponytail: one global read timeout for upstreams (code-gen can be slow); per-provider override later if needed
 UPSTREAM_TIMEOUT = httpx.Timeout(float(os.environ.get("TIMEOUT_SECS", "300")), connect=15)
@@ -31,6 +31,10 @@ app = FastAPI(title="autobot")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 route_log: deque[dict] = deque(maxlen=200)
 
+
+def count_tokens(text: str) -> int:
+    """ponytail: ~4 characters per token, matching the STATE_CHARS heuristic."""
+    return max(1, len(text) // 4)
 
 # ---------- config ----------
 
@@ -148,15 +152,10 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
         raise ValueError("no models configured")
     by_key = {c[0]: c for c in cands}
     req_model = body.get("model")
-    tool_names = []  # ponytail: log what the client actually sent; Kev never sees tools[] so this is
-    # the only place to tell whether two "same" requests had different tool sets (harness MCP loading)
-    for t in body.get("tools") or []:
-        if isinstance(t, dict) and isinstance(t.get("function"), dict):
-            tool_names.append(t["function"].get("name"))
     if req_model and req_model in by_key:
         cand = by_key[req_model]
         log_route(req_model, state, {}, "explicit", req_model, None, False,
-                  {"provider": cand[1], "model": cand[2]["id"]}, tools=tool_names)  # pinned requests were invisible before
+                  {"provider": cand[1], "model": cand[2]["id"]})  # pinned requests were invisible before
         return cand, False  # explicit model wins, no routing
 
     criteria = {k: describe(pname, m, prov) for k, pname, m, prov in cands}
@@ -180,19 +179,20 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
         key = max(effective, key=effective.get) if effective else fallback_key
         bad_answer = key not in by_key  # keys are ours, so this only fires on a malformed answer
         cand = by_key[key]
+        print(f"[autobot] picked {cand[2]['id']} from {cand[1]}")
         log_route(req_model, state, probs, " / ".join(a.get("choice", "?") for a in answers),
                   key, None, bad_answer, {"provider": cand[1], "model": cand[2]["id"]},
-                  effectives=effective, tools=tool_names)
+                  effectives=effective)
         return cand, bad_answer
     except Exception as e:  # kev down / bad answer -> default model keeps the gateway alive
         cand = by_key[fallback_key]
+        print(f"[autobot] fallback to {cand[2]['id']} from {cand[1]}: {e}")
         log_route(req_model, state, {}, f"fallback: {e.__class__.__name__}: {e}", fallback_key, None, True,
-                  {"provider": cand[1], "model": cand[2]["id"]}, tools=tool_names)
+                  {"provider": cand[1], "model": cand[2]["id"]})
         return cand, True
 
 
-def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None, effectives=None,
-              tools=None):
+def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=None, effectives=None):
     entry = {
         "ts": time.strftime("%H:%M:%S"),
         "requested": requested or "(auto)",
@@ -202,11 +202,10 @@ def log_route(requested, state, probs, choice, picked, timing, fell_back, sent=N
         "timing": timing,
         "fallback": fell_back,
         "preview": state[:160].replace("\n", " "),
+        "tokens": count_tokens(state),
     }
     if effectives is not None:
         entry["effective"] = {k: round(v, 3) for k, v in effectives.items()}
-    if tools is not None:
-        entry["tools"] = tools
     if sent is not None:
         entry["sent"] = sent  # exactly what forward() POSTs upstream: {provider, model}
     route_log.appendleft(entry)
