@@ -53,8 +53,12 @@ def validate_config(cfg) -> None:
             if not isinstance(m, dict) or not m.get("id"):
                 raise ValueError(f'provider "{name}": every model needs an id')
             w = m.get("weight")
-            if w is not None and (isinstance(w, bool) or not isinstance(w, (int, float))):
-                raise ValueError(f'provider "{name}"/{m["id"]}: weight must be a number')
+            if w is not None:
+                if isinstance(w, bool) or not isinstance(w, (int, float)):
+                    try:  # accept numeric strings from HTML forms
+                        float(w)
+                    except (TypeError, ValueError):
+                        raise ValueError(f'provider "{name}"/{m["id"]}: weight must be a number')
 
 
 # ---------- routing decision ----------

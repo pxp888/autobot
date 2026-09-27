@@ -39,10 +39,10 @@ function provCard(name){
     <label>api type<input data-pf="api"></label>
     <label>api key<input data-pf="apiKey"></label>
     <label>description (fed to Kev for routing)<input data-pf="description"></label>
-    <table><thead><tr><th style="width:38%">model id</th><th>description — what it's good at, this is the routing signal</th><th></th></tr></thead>
+    <table><thead><tr><th style="width:38%">model id</th><th>description — what it's good at, this is the routing signal</th><th>weight</th></tr></thead>
       <tbody>${(p.models||[]).map((m,i) => `<tr>
         <td><input data-m="${i}" data-mf="id"></td>
-        <td><textarea data-m="${i}" data-mf="description" rows="2" placeholder="none — kev can't tell it apart"></textarea></td>
+        <td><textarea data-m="${i}" data-mf="description" rows="2" placeholder="none — kev can't tell it apart"></textarea></td>\n        <td><input data-m="${i}" data-mf="weight" type="number" step="0.1" placeholder="1.0"></td>
         <td class="rowbtn"><button class="danger" onclick="delModel('${esc(name)}',${i})">×</button></td></tr>`).join('')}</tbody></table>
     <button onclick="addModel('${esc(name)}')">+ add model</button>`;
   for (const f of ['baseUrl','api','apiKey','description']){
@@ -52,7 +52,7 @@ function provCard(name){
   }
   for (const row of el.querySelectorAll('[data-mf]')){
     const m = p.models[+row.dataset.m], f = row.dataset.mf;
-    row.value = m[f] || '';
+    row.value = m[f] !== undefined && m[f] !== null ? m[f] : '';
     row.oninput = () => { m[f] = row.value; };
   }
   return el;
@@ -64,10 +64,15 @@ function addProvider(){
   render();
 }
 function delProvider(name){ if (confirm('delete provider ' + name + '?')) { delete cfg.providers[name]; render(); } }
-function addModel(name){ cfg.providers[name].models.push({ id: '' }); render(); }
+function addModel(name){ cfg.providers[name].models.push({ id: '', weight: 1 }); render(); }
 function delModel(name, i){ cfg.providers[name].models.splice(i, 1); render(); }
 
 async function save(){
+  // clean up empty weight inputs (HTML returns "" when cleared, not null)
+  for (const p of Object.values(cfg.providers||{})) for (const m of p.models||[]) {
+    if (m.weight === '' || m.weight == null) m.weight = 1;
+    else m.weight = Number(m.weight);
+  }
   try { await j('/api/config', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg) });
         $('#saved').textContent = 'saved ' + new Date().toTimeString().slice(0,8); $('#saved').className = 'muted'; }
   catch(e){ $('#saved').textContent = String(e.message || e); $('#saved').className = 'bad'; }
