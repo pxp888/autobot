@@ -30,8 +30,11 @@ UPSTREAM_TIMEOUT = httpx.Timeout(float(os.environ.get("TIMEOUT_SECS", "300")), c
 app = FastAPI(title="autobot")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 route_log: deque[dict] = deque(maxlen=200)
-model_token_counts: dict[str, int] = {}  # in-memory: model_key -> cumulative prompt tokens since startup
-model_request_counts: dict[str, int] = {}  # in-memory: model_key -> cumulative request count since startup
+token_counts = {
+    "prompt": {},       # model_key -> cumulative prompt tokens since startup
+    "completion": {},   # model_key -> cumulative completion tokens since startup
+    "requests": {},     # model_key -> cumulative request count since startup
+}
 
 
 def count_tokens(text: str) -> int:
@@ -228,17 +231,58 @@ def upstream_headers(prov: dict) -> dict:
     return h
 
 
+def sse_usage(buf: bytes) -> tuple[bytes, dict | None]:
+    """ponytail: pull complete SSE data lines out of a rolling buffer; returns (leftover_tail, usage|None).
+    A usage event can be split across TCP reads and share one read with [DONE], so only whole
+    lines are parsed — the old per-chunk regex never produced valid JSON (it captured the key)."""
+    usage = None
+    while b"\n" in buf:
+        line, buf = buf.split(b"\n", 1)
+        s = line.lstrip()
+        if not s.startswith(b"data:"):
+            continue
+        payload = s[5:].lstrip()
+        if not payload or payload == b"[DONE]":
+            continue
+        try:
+            ev = json.loads(payload)
+        except ValueError:
+            continue
+        u = ev.get("usage") if isinstance(ev, dict) else None
+        if isinstance(u, dict):
+            usage = u
+    return buf, usage
+
+
 async def forward(cfg: dict, body: dict, cand: tuple):
     _key, pname, model, prov = cand
+    key = _key
     url, headers = upstream_url(prov), upstream_headers(prov)
     fwd_body = {**body, "model": model["id"]}
+    if fwd_body.get("stream"):
+        # ponytail: OpenAI-compatible streams only emit a final usage chunk when asked; without
+        # this most providers send none and stream token counts stay 0. setdefault respects clients who opt out.
+        fwd_body.setdefault("stream_options", {"include_usage": True})
+
+    def count_usage(resp: dict):
+        usage = resp.get("usage", {})
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+        completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+        if prompt or completion:
+            token_counts["prompt"][key] = token_counts["prompt"].get(key, 0) + prompt
+            token_counts["completion"][key] = token_counts["completion"].get(key, 0) + completion
+        token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
 
     if not body.get("stream"):
         async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
             r = await client.post(url, json=fwd_body, headers=headers)
         try:
-            return JSONResponse(content=r.json(), status_code=r.status_code)
+            data = r.json()
+            count_usage(data)
+            return JSONResponse(content=data, status_code=r.status_code)
         except ValueError:
+            # response is not JSON, log raw for debugging
+            print(f"[autobot] non-JSON response from {key}: {r.text[:500]}")
             return PlainTextResponse(r.text, status_code=r.status_code,
                                      media_type=r.headers.get("content-type", "text/plain"))
 
@@ -247,10 +291,22 @@ async def forward(cfg: dict, body: dict, cand: tuple):
             async with client.stream("POST", url, json=fwd_body, headers=headers) as r:
                 if r.status_code != 200:
                     err = {"error": (await r.aread()).decode(errors="replace")}
+                    token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
                     yield f"data: {json.dumps(err)}\n\n"
                     return
+                buf = b""
+                usage = None
                 async for chunk in r.aiter_bytes():
                     yield chunk
+                    # parse SSE from a rolling buffer; keep the last usage event seen
+                    buf, u = sse_usage(buf + chunk)
+                    if u is not None:
+                        usage = u
+                if usage is not None:
+                    count_usage({"usage": usage})
+                else:
+                    # provider sent no usage (stream_options unsupported?) — count the request only
+                    token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -268,11 +324,6 @@ async def chat_completions(request: Request):
         cand, _fell_back = await decide(cfg, body, state)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
-
-    # count prompt tokens and requests for the model that was picked
-    key = cand[0]
-    model_token_counts[key] = model_token_counts.get(key, 0) + count_tokens(state)
-    model_request_counts[key] = model_request_counts.get(key, 0) + 1
 
     return await forward(cfg, body, cand)
 
@@ -331,15 +382,18 @@ async def save_config(request: Request):
 
 @app.get("/api/token-counts")
 async def get_token_counts():
-    """In-memory cumulative prompt tokens and request counts per model since startup."""
-    counts = dict(model_token_counts)
-    req_counts = dict(model_request_counts)
-    # ensure all counted models appear in both
+    """In-memory cumulative prompt, completion tokens, and request counts per model since startup."""
+    prompt_counts = dict(token_counts["prompt"])
+    completion_counts = dict(token_counts["completion"])
+    req_counts = dict(token_counts["requests"])
+    # ensure all counted models appear in all maps
     for k in req_counts:
-        counts.setdefault(k, counts.get(k, 0))
+        prompt_counts.setdefault(k, 0)
+        completion_counts.setdefault(k, 0)
     req_total = sum(req_counts.values())
-    token_total = sum(counts.values())
-    return {"counts": counts, "total_tokens": token_total, "requests": req_counts, "total_requests": req_total}
+    prompt_total = sum(prompt_counts.values())
+    completion_total = sum(completion_counts.values())
+    return {"prompt_counts": prompt_counts, "completion_counts": completion_counts, "total_prompt_tokens": prompt_total, "total_completion_tokens": completion_total, "requests": req_counts, "total_requests": req_total}
 
 
 @app.get("/api/routes")
@@ -435,6 +489,16 @@ def selftest() -> None:
             assert last["sent"] == {"provider": "p2", "model": "c"}, last
         finally:
             LOG_PATH = old
+
+    # streaming usage extraction (regression: old per-chunk regex captured '"usage": {...}', which
+    # is not JSON — stream token counts were always 0)
+    tail, u = sse_usage(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}\n\ndata: [DONE]\n')
+    assert tail == b"" and u == {"prompt_tokens": 7, "completion_tokens": 3}, (tail, u)
+    # usage event split across two reads: nothing until the line completes
+    t1, u1 = sse_usage(b'data: {"choices":[],"us')
+    assert u1 is None and t1 == b'data: {"choices":[],"us', (t1, u1)
+    t2, u2 = sse_usage(t1 + b'age":{"prompt_tokens":7,"completion_tokens":3}}\n\ndata: [DONE]\n')
+    assert u2 == {"prompt_tokens": 7, "completion_tokens": 3} and t2 == b"", (t2, u2)
 
     print("selftest ok")
 
