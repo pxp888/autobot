@@ -362,7 +362,10 @@ async def health():
 @app.get("/api/config")
 async def get_config():
     cfg = load_config()
-    # form shows the effective address; saving persists it into the file (env becomes fallback only)
+    # mask api keys in the returned config so the GUI never receives real values
+    for p in cfg.get("providers", {}).values():
+        if p.get("apiKey"):
+            p["apiKey"] = "******"
     cfg["kevUrl"] = cfg.get("kevUrl") or KEV_URL
     return cfg
 
@@ -374,6 +377,10 @@ async def save_config(request: Request):
         validate_config(cfg)
     except (ValueError, json.JSONDecodeError) as e:
         return JSONResponse({"error": f"invalid config: {e}"}, status_code=400)
+    # treat "*****" api keys as "no key" so they don't get persisted
+    for p in cfg.get("providers", {}).values():
+        if p.get("apiKey") == "*******":
+            p["apiKey"] = None  # or p.pop("apiKey", None)
     tmp = CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2))  # atomic-ish swap so readers never see a half file
     tmp.replace(CONFIG_PATH)

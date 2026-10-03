@@ -51,8 +51,13 @@ function provCard(name){
     <button onclick="addModel('${esc(name)}')">+ add model</button>`;
   for (const f of ['baseUrl','api','apiKey','description']){
     const inp = el.querySelector(`[data-pf="${f}"]`);
-    inp.value = p[f] || '';
-    inp.oninput = () => { p[f] = inp.value; };
+    if (f === 'apiKey') {
+      inp.value = '******';
+      inp.oninput = () => { p[f] = inp.value; };
+    } else {
+      inp.value = p[f] || '';
+      inp.oninput = () => { p[f] = inp.value; };
+    }
   }
   for (const row of el.querySelectorAll('[data-mf]')){
     const m = p.models[+row.dataset.m], f = row.dataset.mf;
@@ -76,6 +81,17 @@ async function save(){
   for (const p of Object.values(cfg.providers||{})) for (const m of p.models||[]) {
     if (m.weight === '' || m.weight == null) m.weight = 1;
     else m.weight = Number(m.weight);
+  }
+  // if all apiKeys are the masked value '******', remove them so the config
+  // stores no real key (the GUI will keep showing '******' on next load)
+  let hasRealKey = false;
+  for (const p of Object.values(cfg.providers||{})) {
+    if (p.apiKey && p.apiKey !== '*******') hasRealKey = true;
+  }
+  if (!hasRealKey) {
+    for (const p of Object.values(cfg.providers||{})) {
+      p.apiKey = undefined;
+    }
   }
   try { await j('/api/config', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg) });
         $('#saved').textContent = 'saved ' + new Date().toTimeString().slice(0,8); $('#saved').className = 'muted'; }
