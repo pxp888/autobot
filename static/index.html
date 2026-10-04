@@ -22,11 +22,16 @@ const $ = s => document.querySelector(s);
 async function j(u, o) { const r = await fetch(u, o); if (!r.ok) throw new Error(await r.text()); return r.json(); }
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 let cfg = null;
+const MASK = '******'; // must match MASK in autobot.py — don't hand-type the asterisks
 
 // form is the single source of truth in JS: inputs mutate cfg directly (no re-render while typing),
 // structural changes (add/remove) rebuild from cfg so nothing is lost.
 function render(){
+  // these two fields have no card of their own, so wire them up here — without
+  // handlers Save posts the stale values and the file never changes
   $('#kevin').value = cfg.kevUrl || '';
+  $('#kevin').oninput = () => { cfg.kevUrl = $('#kevin').value.trim() || undefined; };
+  $('#defmodel').onchange = () => { cfg.defaultModel = $('#defmodel').value || undefined; };
   const ids = Object.values(cfg.providers||{}).flatMap(p => (p.models||[]).map(m => m.id));
   const sel = $('#defmodel');
   sel.innerHTML = '<option value=""></option>' + ids.map(id => `<option>${esc(id)}</option>`).join('');
@@ -52,7 +57,7 @@ function provCard(name){
   for (const f of ['baseUrl','api','apiKey','description']){
     const inp = el.querySelector(`[data-pf="${f}"]`);
     if (f === 'apiKey') {
-      inp.value = '******';
+      inp.value = MASK;
       inp.oninput = () => { p[f] = inp.value; };
     } else {
       inp.value = p[f] || '';
@@ -82,11 +87,11 @@ async function save(){
     if (m.weight === '' || m.weight == null) m.weight = 1;
     else m.weight = Number(m.weight);
   }
-  // if all apiKeys are the masked value '******', remove them so the config
-  // stores no real key (the GUI will keep showing '******' on next load)
+  // if all apiKeys are the masked value, remove them so the config
+  // stores no real key (the GUI will keep showing MASK on next load)
   let hasRealKey = false;
   for (const p of Object.values(cfg.providers||{})) {
-    if (p.apiKey && p.apiKey !== '*******') hasRealKey = true;
+    if (p.apiKey && p.apiKey !== MASK) hasRealKey = true;
   }
   if (!hasRealKey) {
     for (const p of Object.values(cfg.providers||{})) {
