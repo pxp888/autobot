@@ -26,6 +26,7 @@ STATE_CHARS = int(os.environ.get("STATE_CHARS", "3000"))  # was 4000, then 2000
 KEV_TIMEOUT = float(os.environ.get("KEV_TIMEOUT_SECS", "15"))
 # ponytail: one global read timeout for upstreams (code-gen can be slow); per-provider override later if needed
 UPSTREAM_TIMEOUT = httpx.Timeout(float(os.environ.get("TIMEOUT_SECS", "300")), connect=15)
+MASK = "******"  # apiKey placeholder in /api/config responses; posting it back means "unchanged"
 
 app = FastAPI(title="autobot")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
@@ -365,7 +366,7 @@ async def get_config():
     # mask api keys in the returned config so the GUI never receives real values
     for p in cfg.get("providers", {}).values():
         if p.get("apiKey"):
-            p["apiKey"] = "******"
+            p["apiKey"] = MASK
     cfg["kevUrl"] = cfg.get("kevUrl") or KEV_URL
     return cfg
 
@@ -377,13 +378,19 @@ async def save_config(request: Request):
         validate_config(cfg)
     except (ValueError, json.JSONDecodeError) as e:
         return JSONResponse({"error": f"invalid config: {e}"}, status_code=400)
-    # treat "*****" api keys as "no key" so they don't get persisted
-    for p in cfg.get("providers", {}).values():
-        if p.get("apiKey") == "*******":
-            p["apiKey"] = None  # or p.pop("apiKey", None)
+    # masked/empty apiKey means "unchanged": keep the on-disk value, otherwise every GUI save
+    # (the form always posts the placeholder back) would wipe real keys from providers.json
+    old = load_config().get("providers", {})
+    for name, p in cfg.get("providers", {}).items():
+        old_key = old.get(name, {}).get("apiKey")
+        if old_key not in (None, MASK) and (not p.get("apiKey") or p["apiKey"] == MASK):
+            p["apiKey"] = old_key
     tmp = CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2))  # atomic-ish swap so readers never see a half file
     tmp.replace(CONFIG_PATH)
+    for p in cfg.get("providers", {}).values():  # never echo real keys back to the caller
+        if p.get("apiKey"):
+            p["apiKey"] = MASK
     return cfg
 
 
@@ -471,6 +478,36 @@ def selftest() -> None:
         old, CONFIG_PATH = CONFIG_PATH, p
         try:
             assert load_config()["providers"]["p1"]["models"][0]["id"] == "a"
+        finally:
+            CONFIG_PATH = old
+
+    # regression: the GUI posts apiKeys back masked; saving must not clobber real keys on disk
+    async def post_cfg(body):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            r = await c.post("/api/config", json=body)
+            if r.status_code != 200:
+                raise AssertionError((r.status_code, r.text))
+            return r.json()
+
+    with tempfile.TemporaryDirectory() as d3:
+        p3 = Path(d3) / "c.json"
+        p3.write_text(json.dumps({"providers": {
+            "p1": {"baseUrl": "u", "apiKey": "real-key", "models": [{"id": "a"}]},
+            # p2 simulates the corrupted file: placeholder persisted on disk is not a real key
+            "p2": {"baseUrl": "v", "apiKey": MASK, "models": [{"id": "b"}]}}}))
+        old, CONFIG_PATH = CONFIG_PATH, p3
+        try:
+            got = asyncio.run(post_cfg({"providers": {
+                # masked key -> unchanged; missing key stays missing
+                "p1": {"baseUrl": "u", "apiKey": MASK, "models": [{"id": "a"}]},
+                "p2": {"baseUrl": "v", "models": [{"id": "b"}]}}}))
+            assert got["providers"]["p1"]["apiKey"] == MASK and "apiKey" not in got["providers"]["p2"], got
+            assert json.loads(p3.read_text())["providers"].get("p2", {}).get("apiKey") is None  # placeholder dropped, not kept
+            disk = json.loads(p3.read_text())
+            assert disk["providers"]["p1"]["apiKey"] == "real-key", disk  # the reported bug: mask persisted over real key
+            asyncio.run(post_cfg({"providers": {"p1": {"baseUrl": "u", "apiKey": "new-key", "models": [{"id": "a"}]}}}))
+            assert json.loads(p3.read_text())["providers"]["p1"]["apiKey"] == "new-key"  # explicit key still applies
         finally:
             CONFIG_PATH = old
 
