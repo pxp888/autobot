@@ -73,3 +73,17 @@ local/private interface, don't expose it publicly.
 
 Descriptions are the routing signal: make them specific about what each model
 is suited for.
+
+## Sample Results
+
+| Model | Requests | Prompt Tokens | Completion Tokens | Input Cost | Output Cost | Total Cost |
+|-------|----------|---------------|-------------------|------------|-------------|------------|
+| nemotron-3.5:30b-a3b-nvfp4 | 28 | 596,443 | 15,075 | 0.06 | 0.20 | 0.039 |
+| qwen3.8:27b-ud-q4_k_m | 7 | 17,612 | 16,787 | 0.75 | 2.50 | 0.055 |
+| **Total** | **35** | **614,055** | **31,862** | | | **0.094** |
+| without autobot | 35 | 614,055 | 31,862 | 0.75 | 2.50 | 0.540 |
+
+This example demonstrates the benefit of routing between two model tiers: a capable model for complex tasks (coding, system design, tool use), and a cheaper model for general conversation and light edits.
+
+While token usage is similar across models, the cost difference is substantial — the routing strategy leverages each model's strengths to minimize expense without sacrificing capability.
+
