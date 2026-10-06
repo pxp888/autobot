@@ -8,11 +8,11 @@ This means at every question and every tool call the model may change.
 
 I would recommend a simple dual routing approach.  One smarter, expensive model with a routing description: 
 
-_"coding and tool calling tasks.  System design decisions, architecture. intelligent consideration."_
+___"coding and tool calling tasks.  System design decisions, architecture. intelligent consideration."___
 
 and a faster, cheaper model with the description: 
 
-_"general conversation. light work and easy edits."_
+___"general conversation. light work and easy edits."___
 
 The resulting context grows as the result of both models, and is a reasonable attempt at getting the best of both worlds. 
 
