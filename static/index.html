@@ -9,6 +9,7 @@
 
 <h2 data-od-id="routing">routing</h2>
 <label>Kev server address<input id="kevin" data-od-id="kev-server"></label>
+<label>Kev API key (blank if the server is open)<input id="kevinkey" data-od-id="kev-key"></label>
 <label>Fallback model (used when Kev is down or answers badly)<select id="defmodel" data-od-id="default-model"></select></label>
 
 <h2 data-od-id="providers">providers</h2>
@@ -31,6 +32,8 @@ function render(){
   // handlers Save posts the stale values and the file never changes
   $('#kevin').value = cfg.kevUrl || '';
   $('#kevin').oninput = () => { cfg.kevUrl = $('#kevin').value.trim() || undefined; };
+  $('#kevinkey').value = cfg.kevApiKey || '';
+  $('#kevinkey').oninput = () => { cfg.kevApiKey = $('#kevinkey').value.trim() || undefined; };
   $('#defmodel').onchange = () => { cfg.defaultModel = $('#defmodel').value || undefined; };
   const ids = Object.values(cfg.providers||{}).flatMap(p => (p.models||[]).map(m => m.id));
   const sel = $('#defmodel');

@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 KEV_URL = os.environ.get("KEV_URL", "http://192.168.0.189:8009").rstrip("/")
+KEV_API_KEY = os.environ.get("KEV_API_KEY", "")  # bearer key for keyed Kev servers; empty = open local server
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(Path(__file__).parent / "providers.json")))
 LOG_PATH = Path(os.environ.get("KEV_LOG_PATH", str(Path(__file__).parent / "log.txt")))
 # ponytail: ~4 chars/token heuristic instead of a real tokenizer. Routing looks at the LAST
@@ -51,6 +52,26 @@ def load_config() -> dict:
 def kev_url(cfg: dict) -> str:
     """Effective Kev endpoint: file setting wins, KEV_URL env is the default/fallback."""
     return (cfg.get("kevUrl") or KEV_URL).rstrip("/")
+
+
+def kev_key(cfg: dict) -> str:
+    """Effective Kev bearer key: file setting wins, KEV_API_KEY env is the default/fallback."""
+    return cfg.get("kevApiKey") or KEV_API_KEY
+
+
+def kev_headers(cfg: dict) -> dict:
+    """Keyed servers (started with KEV_API_KEY) require Bearer auth on every /v1/* route; open ones ignore it."""
+    key = kev_key(cfg)
+    return {"authorization": f"Bearer {key}"} if key else {}
+
+
+def resolve_api_key(posted, old):
+    """MASK/empty post means 'unchanged'. Returns the value to persist, or None to drop (placeholder)."""
+    if posted and posted != MASK:
+        return posted
+    if old and old != MASK:
+        return old
+    return None
 
 
 def validate_config(cfg) -> None:
@@ -133,7 +154,7 @@ def average_probs(answers: list[dict]) -> dict:
     return probs
 
 
-async def kev_question(client: httpx.AsyncClient, state: str, criteria: dict, url: str) -> dict:
+async def kev_question(client: httpx.AsyncClient, state: str, criteria: dict, url: str, headers=None) -> dict:
     r = await client.post(
         f"{url}/v1/systemone",
         json={
@@ -146,6 +167,7 @@ async def kev_question(client: httpx.AsyncClient, state: str, criteria: dict, ur
                 }
             },
         },
+        headers=headers or {},
     )
     r.raise_for_status()
     return r.json()["answers"]["model"]
@@ -171,14 +193,14 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
             # ponytail: this Kev checkpoint has a strong last-option position bias (verified via /permute:
             # argmax flips between orders). Two concurrent passes — normal + reversed order — and averaging
             # the probabilities cancels it; wall time stays ~one pass.
-            url = kev_url(cfg)
+            url, headers = kev_url(cfg), kev_headers(cfg)
             if len(criteria) > 1:
                 answers = await asyncio.gather(
-                    kev_question(client, state, criteria, url),
-                    kev_question(client, state, dict(reversed(list(criteria.items()))), url),
+                    kev_question(client, state, criteria, url, headers),
+                    kev_question(client, state, dict(reversed(list(criteria.items()))), url, headers),
                 )
             else:
-                answers = [await kev_question(client, state, criteria, url)]
+                answers = [await kev_question(client, state, criteria, url, headers)]
         probs = average_probs(list(answers))
         # apply per-model weight (steering knob) before picking argmax
         effective = {k: probs[k] * model_weight(by_key.get(k, (None,))[2]) for k in probs}
@@ -353,11 +375,11 @@ async def health():
     kev_up = False
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            kev_up = (await client.get(f"{kev_url(cfg)}/v1/models")).status_code == 200
+            kev_up = (await client.get(f"{kev_url(cfg)}/v1/models", headers=kev_headers(cfg))).status_code == 200
     except Exception:
         pass
-    return {"ok": True, "kev_url": kev_url(cfg), "kev_up": kev_up, "config_path": str(CONFIG_PATH),
-            "models": len(candidates(cfg))}
+    return {"ok": True, "kev_url": kev_url(cfg), "kev_up": kev_up, "kev_key": bool(kev_key(cfg)),
+            "config_path": str(CONFIG_PATH), "models": len(candidates(cfg))}
 
 
 @app.get("/api/config")
@@ -368,6 +390,8 @@ async def get_config():
         if p.get("apiKey"):
             p["apiKey"] = MASK
     cfg["kevUrl"] = cfg.get("kevUrl") or KEV_URL
+    if kev_key(cfg):  # never hand the real key to the GUI (env-sourced ones included)
+        cfg["kevApiKey"] = MASK
     return cfg
 
 
@@ -380,17 +404,23 @@ async def save_config(request: Request):
         return JSONResponse({"error": f"invalid config: {e}"}, status_code=400)
     # masked/empty apiKey means "unchanged": keep the on-disk value, otherwise every GUI save
     # (the form always posts the placeholder back) would wipe real keys from providers.json
-    old = load_config().get("providers", {})
+    old_cfg = load_config()
+    old_provs = old_cfg.get("providers") or {}
     for name, p in cfg.get("providers", {}).items():
-        old_key = old.get(name, {}).get("apiKey")
-        if old_key not in (None, MASK) and (not p.get("apiKey") or p["apiKey"] == MASK):
-            p["apiKey"] = old_key
+        key = resolve_api_key(p.pop("apiKey", None), (old_provs.get(name) or {}).get("apiKey"))
+        if key is not None:
+            p["apiKey"] = key
+    kev = resolve_api_key(cfg.pop("kevApiKey", None), old_cfg.get("kevApiKey"))
+    if kev is not None:
+        cfg["kevApiKey"] = kev
     tmp = CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2))  # atomic-ish swap so readers never see a half file
     tmp.replace(CONFIG_PATH)
     for p in cfg.get("providers", {}).values():  # never echo real keys back to the caller
         if p.get("apiKey"):
             p["apiKey"] = MASK
+    if cfg.get("kevApiKey"):
+        cfg["kevApiKey"] = MASK
     return cfg
 
 
@@ -471,6 +501,28 @@ def selftest() -> None:
     # kev address: file setting wins (trailing slash stripped), env is the default
     assert kev_url({"kevUrl": "http://x:1/"}) == "http://x:1" and kev_url({}) == KEV_URL
 
+    # kev api key: file setting wins over env; header only sent when a key is effective (keyed servers 401 without it)
+    global KEV_API_KEY
+    saved_env_key, KEV_API_KEY = KEV_API_KEY, ""
+    try:
+        assert kev_headers({}) == {} and kev_headers({"kevApiKey": "file"}) == {"authorization": "Bearer file"}
+        seen = {}
+        def handler(req):
+            seen["auth"] = req.headers.get("authorization")
+            return httpx.Response(200, json={"answers": {"model": {"choice": "a", "probabilities": {"a": 1.0}}}})
+        async def _q():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+                return await kev_question(c, "s", {"a": "d"}, "http://k/v1", kev_headers({"kevApiKey": "sekrit"}))
+        ans = asyncio.run(_q())
+        assert seen["auth"] == "Bearer sekrit" and ans["probabilities"] == {"a": 1.0}, (seen, ans)
+    finally:
+        KEV_API_KEY = saved_env_key
+
+    # masked/empty post means unchanged; placeholders never persist to disk
+    assert resolve_api_key(MASK, "real") == "real" and resolve_api_key("", "real") == "real"
+    assert resolve_api_key("new", "real") == "new"
+    assert resolve_api_key(MASK, None) is None and resolve_api_key(MASK, MASK) is None and resolve_api_key(None, None) is None
+
     # config round-trips through the file path
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "c.json"; p.write_text(json.dumps(cfg))
@@ -492,22 +544,25 @@ def selftest() -> None:
 
     with tempfile.TemporaryDirectory() as d3:
         p3 = Path(d3) / "c.json"
-        p3.write_text(json.dumps({"providers": {
+        p3.write_text(json.dumps({"kevApiKey": "disk-kev", "providers": {
             "p1": {"baseUrl": "u", "apiKey": "real-key", "models": [{"id": "a"}]},
             # p2 simulates the corrupted file: placeholder persisted on disk is not a real key
             "p2": {"baseUrl": "v", "apiKey": MASK, "models": [{"id": "b"}]}}}))
         old, CONFIG_PATH = CONFIG_PATH, p3
         try:
-            got = asyncio.run(post_cfg({"providers": {
+            got = asyncio.run(post_cfg({"kevApiKey": MASK, "providers": {
                 # masked key -> unchanged; missing key stays missing
                 "p1": {"baseUrl": "u", "apiKey": MASK, "models": [{"id": "a"}]},
                 "p2": {"baseUrl": "v", "models": [{"id": "b"}]}}}))
             assert got["providers"]["p1"]["apiKey"] == MASK and "apiKey" not in got["providers"]["p2"], got
-            assert json.loads(p3.read_text())["providers"].get("p2", {}).get("apiKey") is None  # placeholder dropped, not kept
+            assert got.get("kevApiKey") == MASK  # response masks it, like provider keys
             disk = json.loads(p3.read_text())
+            assert disk["providers"].get("p2", {}).get("apiKey") is None  # placeholder dropped, not kept
             assert disk["providers"]["p1"]["apiKey"] == "real-key", disk  # the reported bug: mask persisted over real key
-            asyncio.run(post_cfg({"providers": {"p1": {"baseUrl": "u", "apiKey": "new-key", "models": [{"id": "a"}]}}}))
-            assert json.loads(p3.read_text())["providers"]["p1"]["apiKey"] == "new-key"  # explicit key still applies
+            assert disk["kevApiKey"] == "disk-kev", disk  # masked kev post keeps the on-disk key
+            asyncio.run(post_cfg({"kevApiKey": "new-kev", "providers": {"p1": {"baseUrl": "u", "apiKey": "new-key", "models": [{"id": "a"}]}}}))
+            d2 = json.loads(p3.read_text())
+            assert d2["providers"]["p1"]["apiKey"] == "new-key" and d2["kevApiKey"] == "new-kev"  # explicit keys still apply
         finally:
             CONFIG_PATH = old
 
