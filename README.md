@@ -16,6 +16,8 @@ ___"general conversation. light work and easy edits."___
 
 The resulting context grows as the result of both models, and is a reasonable attempt at getting the best of both worlds. 
 
+With some model choices you can see a reduction in cost of up to 80% without losing the capability of the _better_ model.  
+
 
 ```bash
 .venv/bin/pip install -r requirements.txt
