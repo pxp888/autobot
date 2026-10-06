@@ -43,7 +43,7 @@ PORT=8010 .venv/bin/python autobot.py     # env: PORT, KEV_URL, CONFIG_PATH, TIM
 
 ## Web UI
 
-![screenshot](screenshot1.png)
+![screenshot](screenshot2.png)
 
 Open `http://localhost:PORT/`. A single page for editing config without
 touching JSON:
