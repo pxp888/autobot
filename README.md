@@ -4,6 +4,19 @@ OpenAI-compatible inference gateway that routes each request to the best
 provider/model using a [Kev](https://github.com/jaredpalmer/kev) (System One)
 decision endpoint.
 
+This means at every question and every tool call the model may change.  
+
+I would recommend a simple dual routing approach.  One smarter, expensive model with a routing description: 
+
+_"coding and tool calling tasks.  System design decisions, architecture. intelligent consideration."_
+
+and a faster, cheaper model with the description: 
+
+_"general conversation. light work and easy edits."_
+
+The resulting context grows as the result of both models, and is a reasonable attempt at getting the best of both worlds. 
+
+
 ```bash
 .venv/bin/pip install -r requirements.txt
 cp providers.example.json providers.json  # then edit in your real providers (gitignored — it holds API keys)
