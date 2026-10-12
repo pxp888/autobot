@@ -102,3 +102,5 @@ This example demonstrates the benefit of routing between two model tiers: a capa
 
 While token usage is similar across models, the cost difference is substantial — the routing strategy leverages each model's strengths to minimize expense without sacrificing capability.
 
+**Note** - With many coding tasks there is no savings, because the router sees its a coding task, and routes every request to the 'coding' model.  It only avoids high cost tokens for lightweight, conversational prompts.  
+
