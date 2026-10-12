@@ -7,7 +7,7 @@
       "apiKey": "your-key-here",
       "description": "optional context fed to Kev when routing",
       "models": [
-        { "id": "example-smart", "description": "advanced code generation, hard reasoning" },
+        { "id": "example-smart", "description": "coding and tool calling tasks.  System design decisions, architecture. intelligent consideration." },
         { "id": "example-fast", "description": "minor edits, repo search, routine work" }
       ]
     }
