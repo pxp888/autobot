@@ -283,6 +283,9 @@ def sse_usage(buf: bytes) -> tuple[bytes, dict | None]:
 async def forward(cfg: dict, body: dict, cand: tuple):
     _key, pname, model, prov = cand
     key = _key
+    # ponytail: count requests at dispatch — counting only after the stream completes meant any client
+    # that aborted mid-stream (coding harnesses do this routinely) left no trace in the counter.
+    token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
     url, headers = upstream_url(prov), upstream_headers(prov)
     fwd_body = {**body, "model": model["id"]}
     if fwd_body.get("stream"):
@@ -297,7 +300,6 @@ async def forward(cfg: dict, body: dict, cand: tuple):
         if prompt or completion:
             token_counts["prompt"][key] = token_counts["prompt"].get(key, 0) + prompt
             token_counts["completion"][key] = token_counts["completion"].get(key, 0) + completion
-        token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
 
     if not body.get("stream"):
         async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
@@ -317,7 +319,6 @@ async def forward(cfg: dict, body: dict, cand: tuple):
             async with client.stream("POST", url, json=fwd_body, headers=headers) as r:
                 if r.status_code != 200:
                     err = {"error": (await r.aread()).decode(errors="replace")}
-                    token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
                     yield f"data: {json.dumps(err)}\n\n"
                     return
                 buf = b""
@@ -330,9 +331,6 @@ async def forward(cfg: dict, body: dict, cand: tuple):
                         usage = u
                 if usage is not None:
                     count_usage({"usage": usage})
-                else:
-                    # provider sent no usage (stream_options unsupported?) — count the request only
-                    token_counts["requests"][key] = token_counts["requests"].get(key, 0) + 1
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
