@@ -257,11 +257,13 @@ def upstream_headers(prov: dict) -> dict:
     return h
 
 
-def sse_usage(buf: bytes) -> tuple[bytes, dict | None]:
-    """ponytail: pull complete SSE data lines out of a rolling buffer; returns (leftover_tail, usage|None).
+def sse_usage(buf: bytes) -> tuple[bytes, dict | None, str]:
+    """ponytail: pull complete SSE data lines out of a rolling buffer; returns (leftover_tail, usage|None, delta_text).
     A usage event can be split across TCP reads and share one read with [DONE], so only whole
-    lines are parsed — the old per-chunk regex never produced valid JSON (it captured the key)."""
+    lines are parsed — the old per-chunk regex never produced valid JSON (it captured the key).
+    delta_text accumulates generated content + tool-call args for the estimate fallback below."""
     usage = None
+    text = ""
     while b"\n" in buf:
         line, buf = buf.split(b"\n", 1)
         s = line.lstrip()
@@ -274,10 +276,46 @@ def sse_usage(buf: bytes) -> tuple[bytes, dict | None]:
             ev = json.loads(payload)
         except ValueError:
             continue
-        u = ev.get("usage") if isinstance(ev, dict) else None
+        if not isinstance(ev, dict):
+            continue
+        u = ev.get("usage")
         if isinstance(u, dict):
             usage = u
-    return buf, usage
+        for ch in ev.get("choices") or []:
+            d = (ch or {}).get("delta") or {}
+            t = d.get("content")
+            if isinstance(t, str):
+                text += t
+            rc = d.get("reasoning_content")  # qwen3 thinks before it answers; thinking is generated too
+            if isinstance(rc, str):
+                text += rc
+            for tc in d.get("tool_calls") or []:  # coding traffic is mostly tool calls; those are tokens too
+                args = ((tc or {}).get("function") or {}).get("arguments")
+                if isinstance(args, str):
+                    text += args
+    return buf, usage, text
+
+
+def count_usage(key: str, resp: dict) -> None:
+    """Add upstream-reported usage for one response; missing/zero keys are ignored."""
+    usage = resp.get("usage") or {}
+    prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+    completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+    if prompt or completion:
+        token_counts["prompt"][key] = token_counts["prompt"].get(key, 0) + int(prompt)
+        token_counts["completion"][key] = token_counts["completion"].get(key, 0) + int(completion)
+
+
+def finish_counting(key: str, body: dict, usage: dict | None, seen_text: list[str]) -> None:
+    """Count a stream once it ends — exact upstream usage if one arrived, else the ~4-char/token
+    estimate. Clients abort mid-stream routinely (before the final usage chunk), and some servers
+    never send one; without this their requests counted but their tokens didn't."""
+    if isinstance(usage, dict) and usage:
+        count_usage(key, {"usage": usage})
+        return
+    prompt = sum(count_tokens(flatten_content(m.get("content"))) for m in body.get("messages", []) if isinstance(m, dict))
+    text = "".join(seen_text)
+    count_usage(key, {"usage": {"prompt_tokens": prompt, "completion_tokens": count_tokens(text) if text else 0}})
 
 
 async def forward(cfg: dict, body: dict, cand: tuple):
@@ -293,20 +331,12 @@ async def forward(cfg: dict, body: dict, cand: tuple):
         # this most providers send none and stream token counts stay 0. setdefault respects clients who opt out.
         fwd_body.setdefault("stream_options", {"include_usage": True})
 
-    def count_usage(resp: dict):
-        usage = resp.get("usage", {})
-        prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-        completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
-        if prompt or completion:
-            token_counts["prompt"][key] = token_counts["prompt"].get(key, 0) + prompt
-            token_counts["completion"][key] = token_counts["completion"].get(key, 0) + completion
-
     if not body.get("stream"):
         async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
             r = await client.post(url, json=fwd_body, headers=headers)
         try:
             data = r.json()
-            count_usage(data)
+            count_usage(key, data)
             return JSONResponse(content=data, status_code=r.status_code)
         except ValueError:
             # response is not JSON, log raw for debugging
@@ -315,22 +345,28 @@ async def forward(cfg: dict, body: dict, cand: tuple):
                                      media_type=r.headers.get("content-type", "text/plain"))
 
     async def gen():
-        async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
-            async with client.stream("POST", url, json=fwd_body, headers=headers) as r:
-                if r.status_code != 200:
-                    err = {"error": (await r.aread()).decode(errors="replace")}
-                    yield f"data: {json.dumps(err)}\n\n"
-                    return
-                buf = b""
-                usage = None
-                async for chunk in r.aiter_bytes():
-                    yield chunk
-                    # parse SSE from a rolling buffer; keep the last usage event seen
-                    buf, u = sse_usage(buf + chunk)
-                    if u is not None:
-                        usage = u
-                if usage is not None:
-                    count_usage({"usage": usage})
+        buf, usage, seen_text, ok = b"", None, [], False
+        try:
+            async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
+                async with client.stream("POST", url, json=fwd_body, headers=headers) as r:
+                    if r.status_code != 200:
+                        err = {"error": (await r.aread()).decode(errors="replace")}
+                        yield f"data: {json.dumps(err)}\n\n"
+                        return
+                    ok = True
+                    async for chunk in r.aiter_bytes():
+                        yield chunk
+                        # parse SSE from a rolling buffer; keep the last usage event seen
+                        buf, u, t = sse_usage(buf + chunk)
+                        if u is not None:
+                            usage = u
+                        if t:
+                            seen_text.append(t)
+        finally:
+            # ponytail: run in finally so clients that disconnect before the final usage chunk
+            # (harnesses abort mid-stream routinely) still get counted, estimated if needed.
+            if ok:
+                finish_counting(key, body, usage, seen_text)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -595,14 +631,31 @@ def selftest() -> None:
             LOG_PATH = old
 
     # streaming usage extraction (regression: old per-chunk regex captured '"usage": {...}', which
-    # is not JSON — stream token counts were always 0)
-    tail, u = sse_usage(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}\n\ndata: [DONE]\n')
-    assert tail == b"" and u == {"prompt_tokens": 7, "completion_tokens": 3}, (tail, u)
+    # is not JSON — stream token counts were always 0); also accumulates delta text for the estimate fallback
+    tail, u, txt = sse_usage(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}\n\ndata: [DONE]\n')
+    assert tail == b"" and u == {"prompt_tokens": 7, "completion_tokens": 3} and txt == "hi", (tail, u, txt)
     # usage event split across two reads: nothing until the line completes
-    t1, u1 = sse_usage(b'data: {"choices":[],"us')
+    t1, u1, _ = sse_usage(b'data: {"choices":[],"us')
     assert u1 is None and t1 == b'data: {"choices":[],"us', (t1, u1)
-    t2, u2 = sse_usage(t1 + b'age":{"prompt_tokens":7,"completion_tokens":3}}\n\ndata: [DONE]\n')
-    assert u2 == {"prompt_tokens": 7, "completion_tokens": 3} and t2 == b"", (t2, u2)
+    t2, u2, txt2 = sse_usage(t1 + b'age":{"prompt_tokens":7,"completion_tokens":3}}\n\ndata: [DONE]\n')
+    assert u2 == {"prompt_tokens": 7, "completion_tokens": 3} and t2 == b"" and txt2 == "", (t2, u2)
+    # tool-call argument chunks count as generated text too (coding traffic is mostly tool calls)
+    _, u3, txt3 = sse_usage(b'data: {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": "{\\"a\\":"}}]}}]}\n\n')
+    assert u3 is None and txt3 == '{"a":', (u3, txt3)
+    _, u4, txt4 = sse_usage(b'data: {"choices": [{"delta": {"reasoning_content": "hmm"}}]}\n\n')
+    assert u4 is None and txt4 == "hmm", (u4, txt4)
+
+    # finish_counting: exact usage wins; absent usage falls back to the ~4-char estimate so streams
+    # aborted before the final usage chunk still count their tokens (the reported qwen bug)
+    saved_p, saved_c = token_counts["prompt"], token_counts["completion"]
+    try:
+        token_counts["prompt"].clear(); token_counts["completion"].clear()
+        finish_counting("m", {"messages": [{"role": "user", "content": "x" * 100}]}, {"prompt_tokens": 7, "completion_tokens": 3}, ["ignored"])
+        assert token_counts["prompt"]["m"] == 7 and token_counts["completion"]["m"] == 3, (token_counts,)
+        finish_counting("n", {"messages": [{"role": "user", "content": "x" * 100}]}, None, ["y" * 40])
+        assert token_counts["prompt"]["n"] == 25 and token_counts["completion"]["n"] == 10, (token_counts,)
+    finally:
+        token_counts["prompt"], token_counts["completion"] = saved_p, saved_c
 
     print("selftest ok")
 
