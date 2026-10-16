@@ -12,7 +12,7 @@ import urllib.request
 
 REQUEST = {
     "state": "Shoes arrived two weeks late and in the wrong size. Also I see two charges on my card.",
-    "model": "kev-latest",
+    "model": "jev-latest",
     "questions": {
         "department": {"type": "choice", "instructions": "Which team should handle this?",
                        "criteria": {"returns": "Exchanges, refunds, wrong or damaged items",

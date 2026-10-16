@@ -50,8 +50,10 @@ def load_config() -> dict:
 
 
 def kev_url(cfg: dict) -> str:
-    """Effective Kev endpoint: file setting wins, KEV_URL env is the default/fallback."""
-    return (cfg.get("kevUrl") or KEV_URL).rstrip("/")
+    """Effective Kev base URL: file setting wins, KEV_URL env is the default/fallback.
+    Accepts a pasted full endpoint (…/v1/systemone) and normalizes it to its base."""
+    u = (cfg.get("kevUrl") or KEV_URL).rstrip("/")
+    return u[:-len("/v1/systemone")] if u.endswith("/v1/systemone") else u
 
 
 def kev_key(cfg: dict) -> str:
@@ -158,6 +160,7 @@ async def kev_question(client: httpx.AsyncClient, state: str, criteria: dict, ur
     r = await client.post(
         f"{url}/v1/systemone",
         json={
+            "model": "jev-latest",  # required by hosted TypeSafe (rejects kev-latest); local Kev serves both names
             "state": state,
             "questions": {
                 "model": {
@@ -500,6 +503,9 @@ def selftest() -> None:
 
     # kev address: file setting wins (trailing slash stripped), env is the default
     assert kev_url({"kevUrl": "http://x:1/"}) == "http://x:1" and kev_url({}) == KEV_URL
+    # regression: a pasted full endpoint (from the API docs) normalizes to its base, or every
+    # request 404s on …/v1/systemone/v1/systemone and health reports 'kev down'
+    assert kev_url({"kevUrl": "https://a.ai/v1/systemone"}) == "https://a.ai"
 
     # kev api key: file setting wins over env; header only sent when a key is effective (keyed servers 401 without it)
     global KEV_API_KEY
@@ -509,12 +515,13 @@ def selftest() -> None:
         seen = {}
         def handler(req):
             seen["auth"] = req.headers.get("authorization")
+            seen["model"] = json.loads(req.content)["model"]
             return httpx.Response(200, json={"answers": {"model": {"choice": "a", "probabilities": {"a": 1.0}}}})
         async def _q():
             async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
                 return await kev_question(c, "s", {"a": "d"}, "http://k/v1", kev_headers({"kevApiKey": "sekrit"}))
         ans = asyncio.run(_q())
-        assert seen["auth"] == "Bearer sekrit" and ans["probabilities"] == {"a": 1.0}, (seen, ans)
+        assert seen["auth"] == "Bearer sekrit" and seen["model"] == "jev-latest" and ans["probabilities"] == {"a": 1.0}, (seen, ans)
     finally:
         KEV_API_KEY = saved_env_key
 
