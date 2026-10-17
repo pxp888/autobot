@@ -53,7 +53,7 @@ touching JSON:
 - **routing** — Kev server address and fallback-model dropdown (lists every
   configured model id).
 - **providers** — one card per provider with base URL, api type, API key,
-  description, and a table of its models (id + routing description);
+  and a table of its models (id + routing description);
   add/delete providers and models in place.
 - **Save config** — validates then writes `providers.json` atomically
   (`POST /api/config`); since the file is re-read per request, changes are
@@ -77,7 +77,6 @@ local/private interface, don't expose it publicly.
       "baseUrl": "https://host/v1",
       "api": "openai-completions",
       "apiKey": "...",
-      "description": "optional, fed to Kev",
       "models": [
         { "id": "model-id", "description": "what this model is good at — Kev routes on these" }
       ]

@@ -222,3 +222,30 @@ select {
   padding: 2rem;
   text-align: center;
 }
+
+/* Checkbox column & model enable/disable toggle */
+input[type="checkbox"] {
+  width: auto;
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0;
+  vertical-align: middle;
+  transform: scale(1.15);
+}
+
+.prov th.chk-col, .prov td.chk-col {
+  width: 36px;
+  text-align: center;
+  vertical-align: middle;
+  padding: 0.5rem 0.25rem;
+}
+
+tr.disabled-model {
+  opacity: 0.45;
+  background: #f1f1f1;
+}
+
+tr.disabled-model td input:not([type="checkbox"]),
+tr.disabled-model td textarea {
+  color: var(--muted);
+}

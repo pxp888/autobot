@@ -92,6 +92,12 @@ def validate_config(cfg) -> None:
                         float(w)
                     except (TypeError, ValueError):
                         raise ValueError(f'provider "{name}"/{m["id"]}: weight must be a number')
+            en = m.get("enabled")
+            if en is not None and not isinstance(en, bool):
+                if str(en).lower() in ("true", "false"):
+                    m["enabled"] = str(en).lower() == "true"
+                else:
+                    raise ValueError(f'provider "{name}"/{m["id"]}: enabled must be a boolean')
 
 
 # ---------- routing decision ----------
@@ -121,6 +127,8 @@ def candidates(cfg) -> list[tuple[str, str, dict, dict]]:
     out, seen = [], set()
     for pname, prov in cfg.get("providers", {}).items():
         for m in prov.get("models", []):
+            if m.get("enabled") is False:
+                continue
             key = f"{pname}:{m['id']}" if m["id"] in seen else m["id"]
             seen.add(m["id"])
             out.append((key, pname, m, prov))
@@ -139,11 +147,8 @@ def model_weight(model: dict) -> float:
         return 1.0
 
 
-def describe(pname: str, model: dict, prov: dict) -> str:
-    bits = [model.get("description") or "(no description)", f"provider {pname}"]
-    if prov.get("description"):
-        bits.append(prov["description"])
-    return "; ".join(bits)
+def describe(model: dict) -> str:
+    return model.get("description") or "(no description)"
 
 
 def average_probs(answers: list[dict]) -> dict:
@@ -189,7 +194,7 @@ async def decide(cfg: dict, body: dict, state: str) -> tuple[dict, bool]:
                   {"provider": cand[1], "model": cand[2]["id"]})  # pinned requests were invisible before
         return cand, False  # explicit model wins, no routing
 
-    criteria = {k: describe(pname, m, prov) for k, pname, m, prov in cands}
+    criteria = {k: describe(m) for k, _, m, _ in cands}
     fallback_key = next((k for k, _, m, _ in cands if m["id"] == cfg.get("defaultModel")), cands[0][0])
     try:
         async with httpx.AsyncClient(timeout=KEV_TIMEOUT) as client:
@@ -444,6 +449,7 @@ async def save_config(request: Request):
     old_cfg = load_config()
     old_provs = old_cfg.get("providers") or {}
     for name, p in cfg.get("providers", {}).items():
+        p.pop("description", None)
         key = resolve_api_key(p.pop("apiKey", None), (old_provs.get(name) or {}).get("apiKey"))
         if key is not None:
             p["apiKey"] = key
@@ -519,6 +525,11 @@ def selftest() -> None:
         "p1": {"baseUrl": "u", "models": [{"id": "m"}]},
         "p2": {"baseUrl": "v", "models": [{"id": "m"}, {"id": "n"}]}}}
     assert len(candidates(dup)) == 3
+
+    # disabled models: skipped from candidates
+    cfg_disabled = {"providers": {
+        "p1": {"baseUrl": "u", "models": [{"id": "m", "enabled": False}, {"id": "n", "enabled": True}, {"id": "o"}]}}}
+    assert [c[2]["id"] for c in candidates(cfg_disabled)] == ["n", "o"]
 
     # kev_question posts to the given url (regression: it read a non-existent global cfg ->
     # NameError swallowed into fallback on every request)
