@@ -3,7 +3,10 @@
 <link rel="stylesheet" href="/static/style.css"></head><body>
 <h1>autobot <span class="muted" id="status" data-od-id="status">loading…</span></h1>
 
-<h2 data-od-id="token-usage">token usage <span class="muted" id="token-total">—</span></h2>
+<h2 data-od-id="token-usage" style="display:flex; justify-content:space-between; align-items:center;">
+  <span>token usage <span class="muted" id="token-total">—</span></span>
+  <button onclick="resetTokens()" style="font-size:0.75rem; padding:0.25rem 0.6rem; font-weight:normal;" title="Reset token and request counters">reset</button>
+</h2>
 <p class="muted"><span id="prompt-total">—</span> prompt tokens, <span id="completion-total">—</span> completion tokens</p>
 <div id="tok-box"><p class="muted">no requests yet</p></div>
 
@@ -119,6 +122,15 @@ async function save(){
 async function refresh(){
   const h = await j('/health');
   $('#status').innerHTML = h.kev_up ? '<span class="ok">kev up</span>' : '<span class="bad">kev down</span> @ ' + esc(h.kev_url);
+}
+async function resetTokens(){
+  if (!confirm('Reset token counter?')) return;
+  try {
+    await j('/api/token-counts/reset', { method:'POST' });
+    await loadTokens();
+  } catch(e) {
+    alert('Failed to reset token counts: ' + (e.message || e));
+  }
 }
 async function loadTokens(){
   try {

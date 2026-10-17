@@ -483,6 +483,15 @@ async def get_token_counts():
     return {"prompt_counts": prompt_counts, "completion_counts": completion_counts, "total_prompt_tokens": prompt_total, "total_completion_tokens": completion_total, "requests": req_counts, "total_requests": req_total}
 
 
+@app.post("/api/token-counts/reset")
+async def reset_token_counts():
+    """Reset cumulative in-memory token and request counts."""
+    token_counts["prompt"].clear()
+    token_counts["completion"].clear()
+    token_counts["requests"].clear()
+    return {"ok": True}
+
+
 @app.get("/api/routes")
 async def get_routes():
     return list(route_log)
@@ -665,6 +674,15 @@ def selftest() -> None:
         assert token_counts["prompt"]["m"] == 7 and token_counts["completion"]["m"] == 3, (token_counts,)
         finish_counting("n", {"messages": [{"role": "user", "content": "x" * 100}]}, None, ["y" * 40])
         assert token_counts["prompt"]["n"] == 25 and token_counts["completion"]["n"] == 10, (token_counts,)
+
+        # token-counts reset endpoint clears counters
+        async def post_reset():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+                r = await c.post("/api/token-counts/reset")
+                assert r.status_code == 200 and r.json() == {"ok": True}
+        asyncio.run(post_reset())
+        assert len(token_counts["prompt"]) == 0 and len(token_counts["completion"]) == 0 and len(token_counts["requests"]) == 0
     finally:
         token_counts["prompt"], token_counts["completion"] = saved_p, saved_c
 
